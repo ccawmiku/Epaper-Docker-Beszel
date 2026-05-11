@@ -1,0 +1,35 @@
+name: Build Docker Image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/epaper-nas-display:latest
+            ghcr.io/${{ github.repository_owner }}/epaper-nas-display:${{ steps.version.outputs.value }}
+            ghcr.io/${{ github.repository_owner }}/epaper-nas-display:${{ github.sha }}

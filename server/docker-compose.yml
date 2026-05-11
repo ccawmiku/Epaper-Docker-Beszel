@@ -1,0 +1,13 @@
+services:
+  epaper-nas-display:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-0.1.0}
+    container_name: epaper-nas-display
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "15001:15001"
+      - "15002:15001"
