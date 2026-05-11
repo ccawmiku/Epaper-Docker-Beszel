@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import os
 import struct
 from dataclasses import dataclass
 from datetime import datetime
@@ -46,16 +45,11 @@ class RenderedFrame:
 
 class Fonts:
     def __init__(self) -> None:
-        self.tiny = BitmapFont(_load_font(11))
-        self.small = BitmapFont(_load_font(16))
-        self.medium = BitmapFont(_load_font(20))
-        self.large = BitmapFont(_load_font(22))
-        self.clock = BitmapFont(_load_font(34))
-
-
-@dataclass(frozen=True)
-class BitmapFont:
-    font: ImageFont.ImageFont
+        self.tiny = _load_font(12)
+        self.small = _load_font(14)
+        self.medium = _load_font(16)
+        self.large = _load_font(20)
+        self.clock = _load_font(24)
 
 
 def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
@@ -65,11 +59,11 @@ def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
     systems = snapshot.get("systems") or []
     nas = _find_system(systems, "NAS") or (systems[0] if systems else {})
     router = _find_system(systems, "iStoreOS") or (systems[1] if len(systems) > 1 else {})
-    _draw_header(draw, fonts, nas)
+    _draw_header(draw, fonts, nas, snapshot)
     _draw_metric_panels(draw, fonts, nas, router)
     _draw_container_table(draw, fonts, nas)
     if snapshot.get("errors"):
-        _text(draw, 340, 288, f"{len(snapshot['errors'])} ERR", fonts.tiny)
+        draw.text((340, 288), f"{len(snapshot['errors'])} ERR", fill=INK, font=fonts.tiny)
     return _encode_frame(img)
 
 
@@ -78,44 +72,47 @@ def render_error(message: str) -> RenderedFrame:
     draw = ImageDraw.Draw(img)
     fonts = Fonts()
     draw.rectangle((0, 0, EPD_WIDTH - 1, EPD_HEIGHT - 1), outline=INK)
-    _text(draw, 18, 18, "EPAPER DATA ERROR", fonts.large)
+    draw.text((18, 18), "EPAPER DATA ERROR", fill=INK, font=fonts.large)
     draw.line((18, 50, 382, 50), fill=INK)
     _wrapped_text(draw, (18, 70), message, 48, fonts.small, INK, 16)
     return _encode_frame(img)
 
 
-def _draw_header(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any]) -> None:
+def _draw_header(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], snapshot: dict[str, Any]) -> None:
     system = nas.get("system") or {}
     latest = nas.get("latest") or {}
     alert = _system_alert(system, latest)
     _draw_status_mark(draw, 2, 2, 58, alert)
 
     chips = [
-        (72, 2, 92, "NAME", _clip(str(system.get("name") or "EPAPER").upper(), 7)),
-        (176, 2, 72, "TEMP", _temperature_label(latest.get("temperatures"))),
-        (260, 2, 70, "LOAD", _load_label(latest.get("load_average"))),
+        ("NAME", _clip(str(system.get("name") or "EPAPER").upper(), 8)),
+        ("TEMP", _temperature_label(latest.get("temperatures"))),
+        ("LOAD", _load_label(latest.get("load_average"))),
     ]
-    for x, y, w, label, value in chips:
-        _info_chip(draw, fonts, x, y, w, 28, label, value)
+    x = 64
+    for label, value in chips:
+        width = _chip_width(fonts, label, value)
+        _info_chip(draw, fonts, x, 2, width, 24, label, value)
+        x += width + 8
 
     now = datetime.now()
-    _right_text(draw, 397, 2, now.strftime("%m/%d"), fonts.small, fill=SOFT_INK)
-    _right_text(draw, 397, 24, now.strftime("%H:%M"), fonts.clock)
-    draw.line((72, 48, 397, 48), fill=INK)
-    _text(
-        draw,
-        72,
-        55,
-        f"CPU {_fmt_pct(latest.get('cpu_percent'))}  MEM {_fmt_gb_pair(latest.get('memory_used_gb'), latest.get('memory_gb'))}  DISK {_fmt_gb_pair(latest.get('disk_used_gb'), latest.get('disk_gb'))}",
-        fonts.tiny,
+    _right_text(draw, 397, 0, now.strftime("%m/%d"), fonts.small, SOFT_INK)
+    _right_text(draw, 397, 18, now.strftime("%H:%M"), fonts.clock, INK)
+    draw.line((64, 42, 397, 42), fill=INK)
+    chart_label = _chart_window_label(snapshot.get("history_minutes"))
+    draw.text(
+        (64, 49),
+        f"MEM {_fmt_gb_pair(latest.get('memory_used_gb'), latest.get('memory_gb'))}  DISK {_fmt_disk_gb_pair(latest.get('disk_used_gb'), latest.get('disk_gb'))}  {chart_label}",
+        fill=INK,
+        font=fonts.tiny,
     )
 
 
 def _draw_metric_panels(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], router: dict[str, Any]) -> None:
     panels = [
-        (2, 84, 126, 54, "NAS CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
-        (140, 84, 126, 54, "NAS MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
-        (278, 84, 120, 54, "ROUTER", router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
+        (2, 73, 126, 54, "NAS CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
+        (140, 73, 126, 54, "NAS MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
+        (278, 73, 120, 54, "ROUTER", router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
     ]
     for x, y, w, h, title, values, value in panels:
         _panel(draw, fonts, x, y, w, h, title, value, values)
@@ -127,35 +124,40 @@ def _draw_container_table(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str
     total_cpu = sum(float(item.get("cpu_percent") or 0) for item in containers)
     total_mem = sum(float(item.get("memory_mb") or 0) for item in containers)
 
-    _text(draw, 2, 150, "CONTAINERS", fonts.medium)
-    _small_box(draw, fonts, 144, 146, 58, f"RUN {len(containers)}")
-    _small_box(draw, fonts, 214, 146, 74, f"CPU {total_cpu:.1f}%")
-    _small_box(draw, fonts, 300, 146, 86, f"MEM:{_fmt_mb(total_mem)}")
+    draw.text((2, 139), "CONTAINERS", fill=INK, font=fonts.medium)
+    summary = [("RUN", str(len(containers))), ("CPU", f"{total_cpu:.1f}%"), ("MEM", _fmt_mb(total_mem))]
+    widths = [_chip_width(fonts, label, value) for label, value in summary]
+    x = 397 - sum(widths) - 12 * (len(widths) - 1)
+    for (label, value), width in zip(summary, widths):
+        _info_chip(draw, fonts, x, 134, width, 24, label, value)
+        x += width + 12
 
-    left, top, right, bottom = 2, 176, 397, 297
+    left, top, right, bottom = 2, 170, 397, 297
     header_y = top + 22
     draw.rectangle((left, top, right, bottom), outline=INK)
     draw.line((left, header_y, right, header_y), fill=INK)
     draw.line((left, bottom - 1, right, bottom - 1), fill=INK)
-    cols = {"name": 8, "cpu": 180, "mem": 230, "port": 282, "status": 336}
+    cols = {"name": 8, "cpu": 184, "mem": 234, "port": 292, "status": 344}
     for key, label in [("name", "NAME"), ("cpu", "CPU"), ("mem", "MEM"), ("port", "PORT"), ("status", "STATUS")]:
-        _text(draw, cols[key], top + 4, label, fonts.small)
+        draw.text((cols[key], top + 4), label, fill=INK, font=fonts.small)
 
-    row_y = header_y + 6
-    for item in containers[:4]:
-        _text(draw, cols["name"], row_y, _clip_to_width(str(item.get("name") or "--"), fonts.small, cols["cpu"] - cols["name"] - 6), fonts.small)
-        _text(draw, cols["cpu"], row_y, _fmt_pct(item.get("cpu_percent")), fonts.small)
-        _text(draw, cols["mem"], row_y, _fmt_mb(item.get("memory_mb")), fonts.small)
-        _text(draw, cols["port"], row_y, _clip_to_width(_port_label(item.get("ports")), fonts.small, cols["status"] - cols["port"] - 6), fonts.small)
-        _text(draw, cols["status"], row_y, _clip_to_width(_status_label(item.get("status")), fonts.small, right - cols["status"] - 6), fonts.small)
-        row_y += 22
+    row_y = header_y + 5
+    row_step = 17
+    max_rows = max(0, (bottom - row_y - 2) // row_step + 1)
+    for item in containers[:max_rows]:
+        draw.text((cols["name"], row_y), _clip_to_width(str(item.get("name") or "--"), fonts.small, cols["cpu"] - cols["name"] - 6), fill=INK, font=fonts.small)
+        draw.text((cols["cpu"], row_y), _fmt_pct(item.get("cpu_percent")), fill=INK, font=fonts.small)
+        draw.text((cols["mem"], row_y), _fmt_mb(item.get("memory_mb")), fill=INK, font=fonts.small)
+        draw.text((cols["port"], row_y), _clip_to_width(_port_label(item.get("ports")), fonts.small, cols["status"] - cols["port"] - 6), fill=INK, font=fonts.small)
+        draw.text((cols["status"], row_y), _clip_to_width(_status_label(item.get("status")), fonts.small, right - cols["status"] - 6), fill=INK, font=fonts.small)
+        row_y += row_step
 
 
 def _panel(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, title: str, value: str, values: list[Any]) -> None:
     draw.rectangle((x, y, x + w, y + h), outline=INK)
     draw.line((x, y + 20, x + w, y + 20), fill=INK)
-    _text(draw, x + 6, y + 4, title, fonts.tiny)
-    _right_text(draw, x + w - 6, y + 4, value, fonts.tiny)
+    draw.text((x + 6, y + 4), title, fill=INK, font=fonts.tiny)
+    _right_text(draw, x + w - 6, y + 4, value, fonts.tiny, INK)
     _sparkline(draw, x + 8, y + 32, w - 16, h - 39, values)
 
 
@@ -214,17 +216,36 @@ def _encode_frame(img: Image.Image) -> RenderedFrame:
     return RenderedFrame(img, bytes(black), bytes(red))
 
 
+def _load_font(size: int) -> ImageFont.ImageFont:
+    candidates = [
+        Path("C:/Windows/Fonts/consolab.ttf"),
+        Path("C:/Windows/Fonts/consola.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return ImageFont.truetype(str(path), size=size)
+    return ImageFont.load_default()
+
+
 def _info_chip(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, label: str, value: str) -> None:
     draw.rectangle((x, y, x + w, y + h), outline=INK)
     text_y = y + (h - _font_height(fonts.tiny)) // 2
-    _text(draw, x + 5, text_y, label, fonts.tiny, fill=SOFT_INK)
-    _right_text(draw, x + w - 5, text_y, value, fonts.tiny)
+    draw.text((x + 5, text_y), label, fill=SOFT_INK, font=fonts.tiny)
+    _right_text(draw, x + w - 5, text_y, value, fonts.tiny, INK)
 
 
 def _small_box(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, text: str) -> None:
-    h = 20
+    h = 24
     draw.rectangle((x, y, x + w, y + h), outline=INK)
-    _text(draw, x + 5, y + (h - _font_height(fonts.tiny)) // 2, text, fonts.tiny)
+    draw.text((x + 5, y + (h - _font_height(fonts.tiny)) // 2), text, fill=INK, font=fonts.tiny)
+
+
+def _chip_width(fonts: Fonts, label: str, value: str) -> int:
+    label_width, _ = _text_size(fonts.tiny, label)
+    value_width, _ = _text_size(fonts.tiny, value)
+    return max(44, label_width + value_width + 22)
 
 
 def _find_system(systems: list[dict[str, Any]], name_part: str) -> dict[str, Any] | None:
@@ -272,67 +293,42 @@ def _fmt_mb(value: Any) -> str:
     return f"{number / 1024:.1f}G" if number >= 1024 else f"{number:.0f}M"
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    candidates = [
-        Path(os.environ["EPAPER_FONT_PATH"]) if os.environ.get("EPAPER_FONT_PATH") else None,
-        Path("C:/Windows/Fonts/comicbd.ttf"),
-        Path("C:/Windows/Fonts/comic.ttf"),
-        Path("C:/Windows/Fonts/consolab.ttf"),
-        Path("C:/Windows/Fonts/consola.ttf"),
-        Path("C:/Windows/Fonts/lucon.ttf"),
-        Path("DejaVuSansMono-Bold.ttf"),
-    ]
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        try:
-            return ImageFont.truetype(str(candidate), size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
-
-
-def _text(
-    draw: ImageDraw.ImageDraw,
-    x: int,
-    y: int,
-    text: str,
-    font: BitmapFont,
-    fill: tuple[int, int, int] = INK,
-) -> None:
-    value = str(text)
-    if not value:
-        return
-    bbox = draw.textbbox((0, 0), value, font=font.font)
-    width = max(1, bbox[2] - bbox[0])
-    height = max(1, bbox[3] - bbox[1])
-    mask = Image.new("1", (width, height), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.fontmode = "1"
-    mask_draw.text((-bbox[0], -bbox[1]), value, font=font.font, fill=1)
-    draw.bitmap((x, y), mask, fill=fill)
-
-
-def _right_text(draw: ImageDraw.ImageDraw, right: int, y: int, text: str, font: BitmapFont, fill: tuple[int, int, int] = INK) -> None:
+def _right_text(draw: ImageDraw.ImageDraw, right: int, y: int, text: str, font: ImageFont.ImageFont, fill: tuple[int, int, int]) -> None:
     width, _ = _text_size(font, str(text))
-    _text(draw, right - width, y, text, font, fill=fill)
+    draw.text((right - width, y), text, fill=fill, font=font)
 
 
-def _text_size(font: BitmapFont, text: str) -> tuple[int, int]:
-    bbox = ImageDraw.Draw(Image.new("1", (1, 1))).textbbox((0, 0), str(text), font=font.font)
+def _text_size(font: ImageFont.ImageFont, text: str) -> tuple[int, int]:
+    bbox = ImageDraw.Draw(Image.new("1", (1, 1))).textbbox((0, 0), str(text), font=font)
     return max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
 
 
-def _font_height(font: BitmapFont) -> int:
+def _font_height(font: ImageFont.ImageFont) -> int:
     return _text_size(font, "Ag")[1]
 
 
 def _fmt_gb_pair(used: Any, total: Any) -> str:
     if used is None or total is None:
         return "--/--"
-    unit = "T" if float(total) >= 1024 else "G"
-    scale = 1024 if unit == "T" else 1
+    unit = "Tb" if float(total) >= 1024 else "G"
+    scale = 1024 if unit == "Tb" else 1
     return f"{float(used) / scale:.1f}/{float(total) / scale:.1f}{unit}"
+
+
+def _fmt_disk_gb_pair(used: Any, total: Any) -> str:
+    if used is None or total is None:
+        return "--/--Gb"
+    return f"{float(used):.0f}/{float(total):.0f}Gb"
+
+
+def _chart_window_label(minutes: Any) -> str:
+    try:
+        value = int(minutes)
+    except (TypeError, ValueError):
+        value = 1440
+    if value >= 60 and value % 60 == 0:
+        return f"{value // 60}H↓"
+    return f"{value}Min↓"
 
 
 def _port_label(value: Any) -> str:
@@ -347,11 +343,11 @@ def _status_label(value: Any) -> str:
         if number in {"a", "an"}:
             number = "1"
         if "day" in rest:
-            return f"UP{number}D"
+            return f"UP {number}D"
         if "hour" in rest:
-            return f"UP{number}H"
+            return f"UP {number}H"
         if "minute" in rest:
-            return f"UP{number}M"
+            return f"UP {number}M"
         return "UP"
     return _clip(text.upper(), 7)
 
@@ -367,7 +363,7 @@ def _clip(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: max(0, limit - 1)] + "."
 
 
-def _clip_to_width(value: str, font: BitmapFont, width: int) -> str:
+def _clip_to_width(value: str, font: ImageFont.ImageFont, width: int) -> str:
     text = str(value)
     if _text_size(font, text)[0] <= width:
         return text
@@ -377,16 +373,16 @@ def _clip_to_width(value: str, font: BitmapFont, width: int) -> str:
     return (text + suffix) if text else suffix
 
 
-def _wrapped_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, width: int, font: BitmapFont, fill: tuple[int, int, int], line_height: int) -> None:
+def _wrapped_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, width: int, font: ImageFont.ImageFont, fill: tuple[int, int, int], line_height: int) -> None:
     x, y = pos
     line = ""
     for word in text.split():
         trial = f"{line} {word}".strip()
         if len(trial) > width:
-            _text(draw, x, y, line, font, fill=fill)
+            draw.text((x, y), line, fill=fill, font=font)
             y += line_height
             line = word
         else:
             line = trial
     if line:
-        _text(draw, x, y, line, font, fill=fill)
+        draw.text((x, y), line, fill=fill, font=font)

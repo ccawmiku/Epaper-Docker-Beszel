@@ -121,9 +121,11 @@ def preview() -> str:
 <style>
 body{{margin:0;background:#d9d1bd;color:#24221c;font-family:ui-monospace,Consolas,monospace}}
 main{{display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}}
-.controls{{width:{EPD_WIDTH}px;display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:end;margin-bottom:10px;font-size:12px}}
+.controls{{width:{EPD_WIDTH}px;display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:8px;align-items:end;margin-bottom:10px;font-size:12px}}
 label{{display:grid;gap:3px}}
 input,button{{font:inherit;border:1px solid #24221c;background:#f6f2de;padding:4px 8px;min-width:0}}
+input[type=checkbox]{{min-width:auto;accent-color:#24221c}}
+.check{{display:flex;align-items:center;gap:6px;border:1px solid #24221c;background:#f6f2de;padding:4px 8px;height:26px;box-sizing:border-box}}
 button{{cursor:pointer}}
 .bar,.meta{{width:{EPD_WIDTH}px;display:flex;align-items:center;justify-content:space-between;font-size:12px}}
 .bar{{margin-bottom:8px}}
@@ -136,6 +138,7 @@ a{{color:#24221c}}
 <div class="controls">
   <label>刷新间隔/秒<input id="interval" type="number" min="30" max="3600" step="30"></label>
   <label>折线时间/分钟<input id="chart" type="number" min="60" max="1440" step="60"></label>
+  <label class="check">invert<input id="invert" type="checkbox"></label>
   <button id="save">save</button><button id="force">force</button>
 </div>
 <div class="bar"><span>EPD preview: {EPD_WIDTH}x{EPD_HEIGHT}, decoded from frame.bin</span><button id="refresh">refresh</button></div>
@@ -145,9 +148,9 @@ a{{color:#24221c}}
 <script>
 const W={EPD_WIDTH}, H={EPD_HEIGHT}, HEADER=15;
 const canvas=document.getElementById('screen'), ctx=canvas.getContext('2d'), statusEl=document.getElementById('status');
-const intervalInput=document.getElementById('interval'), chartInput=document.getElementById('chart');
+const intervalInput=document.getElementById('interval'), chartInput=document.getElementById('chart'), invertInput=document.getElementById('invert');
 const paper=[246,242,222,255], ink=[36,34,28,255], red=[176,28,22,255];
-let settings={{display_interval_seconds:60,chart_minutes:1440,force_refresh_seq:0}}, timer=null;
+let settings={{display_interval_seconds:60,chart_minutes:1440,force_refresh_seq:0}}, timer=null, inverted=false;
 function bit(bytes,index){{return (bytes[index>>3]&(0x80>>(index&7)))!==0}}
 async function drawFrame(){{
   statusEl.textContent='loading frame.bin';
@@ -160,7 +163,8 @@ async function drawFrame(){{
   const black=new Uint8Array(buf,HEADER,planeBytes), redPlane=new Uint8Array(buf,HEADER+planeBytes,planeBytes);
   const img=ctx.createImageData(W,H);
   for(let i=0;i<W*H;i++){{
-    const color=bit(redPlane,i)?red:(bit(black,i)?ink:paper), p=i*4;
+    const isRed=bit(redPlane,i), isBlack=bit(black,i);
+    const color=isRed?red:(isBlack?(inverted?paper:ink):(inverted?ink:paper)), p=i*4;
     img.data[p]=color[0]; img.data[p+1]=color[1]; img.data[p+2]=color[2]; img.data[p+3]=255;
   }}
   ctx.putImageData(img,0,0);
@@ -179,6 +183,7 @@ function resetTimer(){{if(timer)clearInterval(timer); timer=setInterval(()=>draw
 document.getElementById('refresh').onclick=()=>drawFrame().catch(e=>statusEl.textContent=e.message);
 document.getElementById('save').onclick=()=>saveSettings().catch(e=>statusEl.textContent=e.message);
 document.getElementById('force').onclick=()=>forceRefresh().catch(e=>statusEl.textContent=e.message);
+invertInput.onchange=()=>{{inverted=invertInput.checked; drawFrame().catch(e=>statusEl.textContent=e.message)}};
 loadSettings().then(drawFrame).catch(e=>statusEl.textContent=e.message);
 </script></html>
 """
@@ -206,13 +211,26 @@ def device_config() -> dict[str, object]:
 
 
 def _display_snapshot(minutes: int) -> dict[str, object]:
+    record_type, sample_count = _beszel_chart_window(minutes)
     return get_beszel_client().snapshot(
         names=getattr(settings, "beszel_system_names", []),
         ids=getattr(settings, "beszel_system_ids", []),
         minutes=minutes,
+        sample_count=sample_count,
         container_minutes=1,
-        record_type=settings.beszel_record_type,
+        record_type=record_type,
     )
+
+
+def _beszel_chart_window(minutes: int) -> tuple[str, int]:
+    configured = settings.beszel_record_type.lower()
+    if configured not in {"", "auto", "1m"}:
+        return settings.beszel_record_type, minutes
+    if minutes <= 180:
+        return "1m", minutes
+    if minutes <= 1440:
+        return "10m", max(1, round(minutes / 10))
+    return "20m", max(1, round(minutes / 20))
 
 
 def _render_display_frame(minutes: int):

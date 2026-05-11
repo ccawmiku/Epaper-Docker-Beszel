@@ -80,6 +80,7 @@ class BeszelClient:
         names: list[str] | None = None,
         ids: list[str] | None = None,
         minutes: int = 1440,
+        sample_count: int | None = None,
         container_minutes: int = 1,
         record_type: str = "1m",
     ) -> dict[str, Any]:
@@ -93,8 +94,10 @@ class BeszelClient:
         errors: list[dict[str, str]] = []
         for system in systems:
             system_id = system.get("id", "")
-            stats = self._safe_stats("system_stats", system_id, minutes, record_type, errors)
-            container_stats = self._safe_stats("container_stats", system_id, container_minutes, record_type, errors)
+            stats = self._safe_stats("system_stats", system_id, sample_count or minutes, record_type, errors)
+            if not stats and record_type != "1m":
+                stats = self._safe_stats("system_stats", system_id, minutes, "1m", errors)
+            container_stats = self._safe_stats("container_stats", system_id, container_minutes, "1m", errors)
             containers = self._safe_containers(system_id, errors)
             records.append(
                 {
