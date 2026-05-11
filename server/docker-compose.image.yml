@@ -1,6 +1,6 @@
 services:
   epaper-nas-display:
-    image: ${EPAPER_IMAGE:-ghcr.io/ccawmiku/epaper-nas-display:0.1.0}
+    image: ${EPAPER_IMAGE:-ghcr.io/ccawmiku/epaper-nas-display:0.1.1}
     container_name: epaper-nas-display
     restart: unless-stopped
     env_file:
@@ -8,3 +8,5 @@ services:
     ports:
       - "15001:15001"
       - "15002:15001"
+    volumes:
+      - ./fonts:/fonts:ro

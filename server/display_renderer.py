@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import struct
 from dataclasses import dataclass
 from datetime import datetime
@@ -45,11 +46,16 @@ class RenderedFrame:
 
 class Fonts:
     def __init__(self) -> None:
-        self.tiny = _load_font(12)
-        self.small = _load_font(14)
-        self.medium = _load_font(16)
-        self.large = _load_font(20)
-        self.clock = _load_font(24)
+        self.tiny = BitmapFont(_load_font(11))
+        self.small = BitmapFont(_load_font(16))
+        self.medium = BitmapFont(_load_font(20))
+        self.large = BitmapFont(_load_font(22))
+        self.clock = BitmapFont(_load_font(34))
+
+
+@dataclass(frozen=True)
+class BitmapFont:
+    font: ImageFont.ImageFont
 
 
 def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
@@ -63,7 +69,7 @@ def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
     _draw_metric_panels(draw, fonts, nas, router)
     _draw_container_table(draw, fonts, nas)
     if snapshot.get("errors"):
-        draw.text((340, 288), f"{len(snapshot['errors'])} ERR", fill=INK, font=fonts.tiny)
+        _text(draw, 340, 288, f"{len(snapshot['errors'])} ERR", fonts.tiny)
     return _encode_frame(img)
 
 
@@ -72,7 +78,7 @@ def render_error(message: str) -> RenderedFrame:
     draw = ImageDraw.Draw(img)
     fonts = Fonts()
     draw.rectangle((0, 0, EPD_WIDTH - 1, EPD_HEIGHT - 1), outline=INK)
-    draw.text((18, 18), "EPAPER DATA ERROR", fill=INK, font=fonts.large)
+    _text(draw, 18, 18, "EPAPER DATA ERROR", fonts.large)
     draw.line((18, 50, 382, 50), fill=INK)
     _wrapped_text(draw, (18, 70), message, 48, fonts.small, INK, 16)
     return _encode_frame(img)
@@ -82,33 +88,34 @@ def _draw_header(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any]) -
     system = nas.get("system") or {}
     latest = nas.get("latest") or {}
     alert = _system_alert(system, latest)
-    _draw_status_mark(draw, 10, 10, 58, alert)
+    _draw_status_mark(draw, 2, 2, 58, alert)
 
     chips = [
-        (78, 10, 86, "NAME", _clip(str(system.get("name") or "EPAPER").upper(), 8)),
-        (170, 10, 76, "TEMP", _temperature_label(latest.get("temperatures"))),
-        (252, 10, 72, "LOAD", _load_label(latest.get("load_average"))),
+        (72, 2, 92, "NAME", _clip(str(system.get("name") or "EPAPER").upper(), 7)),
+        (176, 2, 72, "TEMP", _temperature_label(latest.get("temperatures"))),
+        (260, 2, 70, "LOAD", _load_label(latest.get("load_average"))),
     ]
     for x, y, w, label, value in chips:
         _info_chip(draw, fonts, x, y, w, 28, label, value)
 
     now = datetime.now()
-    draw.text((338, 4), now.strftime("%m/%d"), fill=SOFT_INK, font=fonts.small)
-    draw.text((326, 25), now.strftime("%H:%M"), fill=INK, font=fonts.clock)
-    draw.line((78, 48, 390, 48), fill=INK)
-    draw.text(
-        (78, 55),
+    _right_text(draw, 397, 2, now.strftime("%m/%d"), fonts.small, fill=SOFT_INK)
+    _right_text(draw, 397, 24, now.strftime("%H:%M"), fonts.clock)
+    draw.line((72, 48, 397, 48), fill=INK)
+    _text(
+        draw,
+        72,
+        55,
         f"CPU {_fmt_pct(latest.get('cpu_percent'))}  MEM {_fmt_gb_pair(latest.get('memory_used_gb'), latest.get('memory_gb'))}  DISK {_fmt_gb_pair(latest.get('disk_used_gb'), latest.get('disk_gb'))}",
-        fill=INK,
-        font=fonts.tiny,
+        fonts.tiny,
     )
 
 
 def _draw_metric_panels(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], router: dict[str, Any]) -> None:
     panels = [
-        (10, 82, 122, 50, "NAS CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
-        (139, 82, 122, 50, "NAS MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
-        (268, 82, 122, 50, "ROUTER", router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
+        (2, 84, 126, 54, "NAS CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
+        (140, 84, 126, 54, "NAS MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
+        (278, 84, 120, 54, "ROUTER", router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
     ]
     for x, y, w, h, title, values, value in panels:
         _panel(draw, fonts, x, y, w, h, title, value, values)
@@ -120,36 +127,36 @@ def _draw_container_table(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str
     total_cpu = sum(float(item.get("cpu_percent") or 0) for item in containers)
     total_mem = sum(float(item.get("memory_mb") or 0) for item in containers)
 
-    draw.text((10, 143), "CONTAINERS", fill=INK, font=fonts.medium)
-    _small_box(draw, fonts, 132, 140, 56, f"RUN {len(containers)}")
-    _small_box(draw, fonts, 196, 140, 72, f"CPU {total_cpu:.1f}%")
-    _small_box(draw, fonts, 276, 140, 94, f"MEM:{_fmt_mb(total_mem)}")
+    _text(draw, 2, 150, "CONTAINERS", fonts.medium)
+    _small_box(draw, fonts, 144, 146, 58, f"RUN {len(containers)}")
+    _small_box(draw, fonts, 214, 146, 74, f"CPU {total_cpu:.1f}%")
+    _small_box(draw, fonts, 300, 146, 86, f"MEM:{_fmt_mb(total_mem)}")
 
-    left, top, right, bottom = 10, 166, 390, 286
-    header_y = top + 20
+    left, top, right, bottom = 2, 176, 397, 297
+    header_y = top + 22
     draw.rectangle((left, top, right, bottom), outline=INK)
     draw.line((left, header_y, right, header_y), fill=INK)
     draw.line((left, bottom - 1, right, bottom - 1), fill=INK)
-    cols = {"name": 16, "cpu": 176, "mem": 226, "port": 282, "status": 334}
+    cols = {"name": 8, "cpu": 180, "mem": 230, "port": 282, "status": 336}
     for key, label in [("name", "NAME"), ("cpu", "CPU"), ("mem", "MEM"), ("port", "PORT"), ("status", "STATUS")]:
-        draw.text((cols[key], top + 4), label, fill=INK, font=fonts.small)
+        _text(draw, cols[key], top + 4, label, fonts.small)
 
     row_y = header_y + 6
-    for item in containers[:5]:
-        draw.text((cols["name"], row_y), _clip(str(item.get("name") or "--"), 18), fill=INK, font=fonts.small)
-        draw.text((cols["cpu"], row_y), _fmt_pct(item.get("cpu_percent")), fill=INK, font=fonts.small)
-        draw.text((cols["mem"], row_y), _fmt_mb(item.get("memory_mb")), fill=INK, font=fonts.small)
-        draw.text((cols["port"], row_y), _port_label(item.get("ports")), fill=INK, font=fonts.small)
-        draw.text((cols["status"], row_y), _status_label(item.get("status")), fill=INK, font=fonts.small)
-        row_y += 18
+    for item in containers[:4]:
+        _text(draw, cols["name"], row_y, _clip_to_width(str(item.get("name") or "--"), fonts.small, cols["cpu"] - cols["name"] - 6), fonts.small)
+        _text(draw, cols["cpu"], row_y, _fmt_pct(item.get("cpu_percent")), fonts.small)
+        _text(draw, cols["mem"], row_y, _fmt_mb(item.get("memory_mb")), fonts.small)
+        _text(draw, cols["port"], row_y, _clip_to_width(_port_label(item.get("ports")), fonts.small, cols["status"] - cols["port"] - 6), fonts.small)
+        _text(draw, cols["status"], row_y, _clip_to_width(_status_label(item.get("status")), fonts.small, right - cols["status"] - 6), fonts.small)
+        row_y += 22
 
 
 def _panel(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, title: str, value: str, values: list[Any]) -> None:
     draw.rectangle((x, y, x + w, y + h), outline=INK)
-    draw.line((x, y + 18, x + w, y + 18), fill=INK)
-    draw.text((x + 5, y + 3), title, fill=INK, font=fonts.tiny)
-    draw.text((x + w - 48, y + 3), value, fill=INK, font=fonts.tiny)
-    _sparkline(draw, x + 8, y + 29, w - 16, h - 36, values)
+    draw.line((x, y + 20, x + w, y + 20), fill=INK)
+    _text(draw, x + 6, y + 4, title, fonts.tiny)
+    _right_text(draw, x + w - 6, y + 4, value, fonts.tiny)
+    _sparkline(draw, x + 8, y + 32, w - 16, h - 39, values)
 
 
 def _sparkline(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, h: int, values: list[Any]) -> None:
@@ -207,28 +214,17 @@ def _encode_frame(img: Image.Image) -> RenderedFrame:
     return RenderedFrame(img, bytes(black), bytes(red))
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    candidates = [
-        Path("C:/Windows/Fonts/consolab.ttf"),
-        Path("C:/Windows/Fonts/consola.ttf"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
-    ]
-    for path in candidates:
-        if path.exists():
-            return ImageFont.truetype(str(path), size=size)
-    return ImageFont.load_default()
-
-
 def _info_chip(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, label: str, value: str) -> None:
     draw.rectangle((x, y, x + w, y + h), outline=INK)
-    draw.text((x + 5, y + 5), label, fill=SOFT_INK, font=fonts.tiny)
-    draw.text((x + 44, y + 5), value, fill=INK, font=fonts.tiny)
+    text_y = y + (h - _font_height(fonts.tiny)) // 2
+    _text(draw, x + 5, text_y, label, fonts.tiny, fill=SOFT_INK)
+    _right_text(draw, x + w - 5, text_y, value, fonts.tiny)
 
 
 def _small_box(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, text: str) -> None:
-    draw.rectangle((x, y, x + w, y + 18), outline=INK)
-    draw.text((x + 5, y + 3), text, fill=INK, font=fonts.tiny)
+    h = 20
+    draw.rectangle((x, y, x + w, y + h), outline=INK)
+    _text(draw, x + 5, y + (h - _font_height(fonts.tiny)) // 2, text, fonts.tiny)
 
 
 def _find_system(systems: list[dict[str, Any]], name_part: str) -> dict[str, Any] | None:
@@ -276,6 +272,61 @@ def _fmt_mb(value: Any) -> str:
     return f"{number / 1024:.1f}G" if number >= 1024 else f"{number:.0f}M"
 
 
+def _load_font(size: int) -> ImageFont.ImageFont:
+    candidates = [
+        Path(os.environ["EPAPER_FONT_PATH"]) if os.environ.get("EPAPER_FONT_PATH") else None,
+        Path("C:/Windows/Fonts/comicbd.ttf"),
+        Path("C:/Windows/Fonts/comic.ttf"),
+        Path("C:/Windows/Fonts/consolab.ttf"),
+        Path("C:/Windows/Fonts/consola.ttf"),
+        Path("C:/Windows/Fonts/lucon.ttf"),
+        Path("DejaVuSansMono-Bold.ttf"),
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            return ImageFont.truetype(str(candidate), size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _text(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    text: str,
+    font: BitmapFont,
+    fill: tuple[int, int, int] = INK,
+) -> None:
+    value = str(text)
+    if not value:
+        return
+    bbox = draw.textbbox((0, 0), value, font=font.font)
+    width = max(1, bbox[2] - bbox[0])
+    height = max(1, bbox[3] - bbox[1])
+    mask = Image.new("1", (width, height), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.fontmode = "1"
+    mask_draw.text((-bbox[0], -bbox[1]), value, font=font.font, fill=1)
+    draw.bitmap((x, y), mask, fill=fill)
+
+
+def _right_text(draw: ImageDraw.ImageDraw, right: int, y: int, text: str, font: BitmapFont, fill: tuple[int, int, int] = INK) -> None:
+    width, _ = _text_size(font, str(text))
+    _text(draw, right - width, y, text, font, fill=fill)
+
+
+def _text_size(font: BitmapFont, text: str) -> tuple[int, int]:
+    bbox = ImageDraw.Draw(Image.new("1", (1, 1))).textbbox((0, 0), str(text), font=font.font)
+    return max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
+
+
+def _font_height(font: BitmapFont) -> int:
+    return _text_size(font, "Ag")[1]
+
+
 def _fmt_gb_pair(used: Any, total: Any) -> str:
     if used is None or total is None:
         return "--/--"
@@ -296,11 +347,11 @@ def _status_label(value: Any) -> str:
         if number in {"a", "an"}:
             number = "1"
         if "day" in rest:
-            return f"UP {number}D"
+            return f"UP{number}D"
         if "hour" in rest:
-            return f"UP {number}H"
+            return f"UP{number}H"
         if "minute" in rest:
-            return f"UP {number}M"
+            return f"UP{number}M"
         return "UP"
     return _clip(text.upper(), 7)
 
@@ -316,16 +367,26 @@ def _clip(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: max(0, limit - 1)] + "."
 
 
-def _wrapped_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, width: int, font: ImageFont.ImageFont, fill: tuple[int, int, int], line_height: int) -> None:
+def _clip_to_width(value: str, font: BitmapFont, width: int) -> str:
+    text = str(value)
+    if _text_size(font, text)[0] <= width:
+        return text
+    suffix = "."
+    while text and _text_size(font, text + suffix)[0] > width:
+        text = text[:-1]
+    return (text + suffix) if text else suffix
+
+
+def _wrapped_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, width: int, font: BitmapFont, fill: tuple[int, int, int], line_height: int) -> None:
     x, y = pos
     line = ""
     for word in text.split():
         trial = f"{line} {word}".strip()
         if len(trial) > width:
-            draw.text((x, y), line, fill=fill, font=font)
+            _text(draw, x, y, line, font, fill=fill)
             y += line_height
             line = word
         else:
             line = trial
     if line:
-        draw.text((x, y), line, fill=fill, font=font)
+        _text(draw, x, y, line, font, fill=fill)

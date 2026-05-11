@@ -1,6 +1,6 @@
 # ESP32-C3 墨水屏 NAS 状态屏
 
-版本：`0.1.0`
+版本：`0.1.1`
 
 这个项目把 ESP32-C3 作为纯显示端使用：NAS 上的 Docker 服务负责连接 Beszel、渲染 400x300 的墨水屏画面，并输出统一的 `frame.bin`。浏览器预览页和 ESP32-C3 都读取同一个 `frame.bin`，所以网页预览和真实墨水屏显示尽量保持一致。
 
@@ -34,15 +34,18 @@ python app.py
 编辑 `server/.env`：
 
 ```env
-BESZEL_BASE_URL=http://192.168.1.20:8090
+BESZEL_BASE_URL=http://YOUR_NAS_IP:8090
 BESZEL_EMAIL=你的 Beszel 邮箱
 BESZEL_PASSWORD=你的 Beszel 密码
 BESZEL_HISTORY_MINUTES=30
 BESZEL_RECORD_TYPE=1m
 DISPLAY_CHART_MINUTES=1440
+EPAPER_FONT_PATH=/fonts/comic.ttf
 APP_HOST=0.0.0.0
 APP_PORT=15001
 ```
+
+字体现在优先使用 Comic Sans。Windows/PyCharm 本地会自动读取 `C:\Windows\Fonts\comicbd.ttf`；Docker 里把 `comic.ttf` 放到 `server/fonts/comic.ttf`，上面的 `EPAPER_FONT_PATH=/fonts/comic.ttf` 就会生效。
 
 打开后台预览：
 
@@ -80,7 +83,7 @@ docker compose up -d --build
 推送到 GitHub 后，Actions 会发布：
 
 ```text
-ghcr.io/ccawmiku/epaper-nas-display:0.1.0
+ghcr.io/ccawmiku/epaper-nas-display:0.1.1
 ghcr.io/ccawmiku/epaper-nas-display:latest
 ```
 
@@ -89,7 +92,7 @@ NAS 上运行：
 ```bash
 cd server
 cp .env.example .env
-export EPAPER_IMAGE=ghcr.io/ccawmiku/epaper-nas-display:0.1.0
+export EPAPER_IMAGE=ghcr.io/ccawmiku/epaper-nas-display:0.1.1
 docker compose -f docker-compose.image.yml up -d
 ```
 
@@ -115,8 +118,8 @@ static const char* CONFIG_URL = "http://YOUR_NAS_IP:15002/api/device/config";
 ```cpp
 static const char* WIFI_SSID = "你的WiFi";
 static const char* WIFI_PASSWORD = "你的WiFi密码";
-static const char* FRAME_URL = "http://192.168.1.20:15002/frame.bin";
-static const char* CONFIG_URL = "http://192.168.1.20:15002/api/device/config";
+static const char* FRAME_URL = "http://YOUR_NAS_IP:15002/frame.bin";
+static const char* CONFIG_URL = "http://YOUR_NAS_IP:15002/api/device/config";
 ```
 
 ## frame.bin 格式

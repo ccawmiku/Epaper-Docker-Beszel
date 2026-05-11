@@ -28,7 +28,7 @@ def _csv_env(name: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Settings:
-    beszel_base_url: str = _env("BESZEL_BASE_URL", "http://192.168.1.20:8090")
+    beszel_base_url: str = _env("BESZEL_BASE_URL", "http://YOUR_NAS_IP:8090")
     beszel_email: str = _env("BESZEL_EMAIL")
     beszel_password: str = _env("BESZEL_PASSWORD")
     beszel_history_minutes: int = _env_int("BESZEL_HISTORY_MINUTES", 30)

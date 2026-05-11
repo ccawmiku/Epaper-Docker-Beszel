@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        APP_VERSION: ${APP_VERSION:-0.1.0}
+        APP_VERSION: ${APP_VERSION:-0.1.1}
     container_name: epaper-nas-display
     restart: unless-stopped
     env_file:
@@ -11,3 +11,5 @@ services:
     ports:
       - "15001:15001"
       - "15002:15001"
+    volumes:
+      - ./fonts:/fonts:ro
