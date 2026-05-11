@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 CONFIG_PATH = Path(__file__).resolve().parent / "runtime_config.json"
@@ -17,8 +18,9 @@ class RuntimeConfig:
     display_interval_seconds: int = 60
     chart_minutes: int = 1440
     system_modes: dict[str, str] | None = None
-    font_name: str = "mono"
+    font_name: str = "pixel"
     font_size: int = 0
+    timezone: str = "Asia/Shanghai"
     force_refresh_seq: int = 0
     updated_at: str = ""
 
@@ -40,7 +42,9 @@ def update_runtime_config(patch: dict[str, Any]) -> RuntimeConfig:
         if "font_name" in patch:
             config.font_name = _clean_font_name(patch["font_name"])
         if "font_size" in patch:
-            config.font_size = _bounded_int(patch["font_size"], -3, 4, 0)
+            config.font_size = _bounded_int(patch["font_size"], -1, 2, 0)
+        if "timezone" in patch:
+            config.timezone = _clean_timezone(patch["timezone"])
         config.updated_at = datetime.now(timezone.utc).isoformat()
         _save_unlocked(config)
         return config
@@ -68,7 +72,8 @@ def _load_unlocked() -> RuntimeConfig:
         chart_minutes=_bounded_int(data.get("chart_minutes"), 60, 1440, 1440),
         system_modes=_clean_modes(data.get("system_modes")),
         font_name=_clean_font_name(data.get("font_name")),
-        font_size=_bounded_int(data.get("font_size"), -3, 4, 0),
+        font_size=_bounded_int(data.get("font_size"), -1, 2, 0),
+        timezone=_clean_timezone(data.get("timezone")),
         force_refresh_seq=_bounded_int(data.get("force_refresh_seq"), 0, 1000000000, 0),
         updated_at=str(data.get("updated_at") or ""),
     )
@@ -98,5 +103,14 @@ def _clean_modes(value: Any) -> dict[str, str]:
 
 
 def _clean_font_name(value: Any) -> str:
-    text = str(value or "mono").lower()
-    return text if text in {"mono", "serif", "sans"} else "mono"
+    text = str(value or "pixel").lower()
+    return text if text in {"pixel", "narrow", "wide", "bold"} else "pixel"
+
+
+def _clean_timezone(value: Any) -> str:
+    text = str(value or "Asia/Shanghai").strip()
+    try:
+        ZoneInfo(text)
+    except ZoneInfoNotFoundError:
+        return "Asia/Shanghai"
+    return text

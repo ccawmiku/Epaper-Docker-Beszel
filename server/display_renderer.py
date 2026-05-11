@@ -1,13 +1,13 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import struct
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 
 EPD_WIDTH = 400
@@ -43,15 +43,103 @@ class RenderedFrame:
         return out.getvalue()
 
 
+_GLYPHS_5X7 = {
+    " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+    "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
+    "%": ["11001", "11010", "00100", "01000", "10110", "00110", "00000"],
+    "&": ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
+    "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
+    ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
+    "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
+    ",": ["00000", "00000", "00000", "00000", "00110", "00100", "01000"],
+    "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+    ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
+    "/": ["00001", "00010", "00100", "01000", "10000", "00000", "00000"],
+    ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
+    "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"],
+    "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+    "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+    "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+    "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+    "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+    "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+    "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+    "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+    "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+    "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "B": ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
+    "C": ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "G": ["01111", "10000", "10000", "10011", "10001", "10001", "01111"],
+    "H": ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+    "J": ["00001", "00001", "00001", "00001", "10001", "10001", "01110"],
+    "K": ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
+    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "Q": ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
+    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+    "W": ["10001", "10001", "10001", "10101", "10101", "10101", "01010"],
+    "X": ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+    "Y": ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+    "Z": ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
+    "?": ["01110", "10001", "00001", "00010", "00100", "00000", "00100"],
+}
+
+
+@dataclass(frozen=True)
+class BitmapFont:
+    scale: int = 2
+    x_scale: int = 2
+    spacing: int = 2
+    weight: int = 1
+
+    @property
+    def height(self) -> int:
+        return 7 * self.scale
+
+    def measure(self, text: str) -> tuple[int, int]:
+        chars = _bitmap_text(text)
+        if not chars:
+            return 1, self.height
+        width = 0
+        for ch in chars:
+            glyph = _GLYPHS_5X7.get(ch, _GLYPHS_5X7["?"])
+            width += len(glyph[0]) * self.x_scale + self.spacing
+        return max(1, width - self.spacing), self.height
+
+    def draw(self, draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, fill: tuple[int, int, int]) -> None:
+        x, y = xy
+        for ch in _bitmap_text(text):
+            glyph = _GLYPHS_5X7.get(ch, _GLYPHS_5X7["?"])
+            for row, bits in enumerate(glyph):
+                for col, bit in enumerate(bits):
+                    if bit == "1":
+                        x0 = x + col * self.x_scale
+                        y0 = y + row * self.scale
+                        draw.rectangle((x0, y0, x0 + self.x_scale + self.weight - 2, y0 + self.scale - 1), fill=fill)
+            x += len(glyph[0]) * self.x_scale + self.spacing
+
+
 class Fonts:
     def __init__(self, font_name: str = "mono", size_delta: int = 0) -> None:
         self.name = font_name
-        self.delta = max(-3, min(4, int(size_delta or 0)))
-        self.tiny = _load_font(12 + self.delta, self.name)
-        self.small = _load_font(14 + self.delta, self.name)
-        self.medium = _load_font(16 + self.delta, self.name)
-        self.large = _load_font(20 + self.delta, self.name)
-        self.clock = _load_font(24 + self.delta, self.name)
+        self.delta = max(-1, min(2, int(size_delta or 0)))
+        self.tiny = _load_font("tiny", self.name, self.delta)
+        self.small = _load_font("small", self.name, self.delta)
+        self.medium = _load_font("medium", self.name, self.delta)
+        self.large = _load_font("large", self.name, self.delta)
+        self.clock = _load_font("clock", self.name, self.delta)
 
 
 def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
@@ -67,7 +155,7 @@ def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
     _draw_metric_panels(draw, fonts, nas, router)
     _draw_container_table(draw, fonts, nas)
     if snapshot.get("errors"):
-        draw.text((340, 288), f"{len(snapshot['errors'])} ERR", fill=INK, font=fonts.tiny)
+        _draw_text(draw, (340, 288), f"{len(snapshot['errors'])} ERR", fonts.tiny, INK)
     if (snapshot.get("display") or {}).get("invert"):
         _invert_black_white(img)
     return _encode_frame(img)
@@ -78,7 +166,7 @@ def render_error(message: str) -> RenderedFrame:
     draw = ImageDraw.Draw(img)
     fonts = Fonts()
     draw.rectangle((0, 0, EPD_WIDTH - 1, EPD_HEIGHT - 1), outline=INK)
-    draw.text((18, 18), "EPAPER DATA ERROR", fill=INK, font=fonts.large)
+    _draw_text(draw, (18, 18), "EPAPER DATA ERROR", fonts.large, INK)
     draw.line((18, 50, 382, 50), fill=INK)
     _wrapped_text(draw, (18, 70), message, 48, fonts.small, INK, 16)
     return _encode_frame(img)
@@ -101,16 +189,17 @@ def _draw_header(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], s
         _info_chip(draw, fonts, x, 2, width, 24, label, value)
         x += width + 8
 
-    now = datetime.now()
+    now = datetime.now(_timezone(snapshot))
     _right_text(draw, 397, 0, now.strftime("%m/%d"), fonts.small, SOFT_INK)
     _right_text(draw, 397, 18, now.strftime("%H:%M"), fonts.clock, INK)
     draw.line((64, 42, 397, 42), fill=INK)
     chart_label = _chart_window_label(snapshot.get("history_minutes"))
-    draw.text(
+    _draw_text(
+        draw,
         (64, 49),
         f"MEM {_fmt_gb_pair(latest.get('memory_used_gb'), latest.get('memory_gb'))}  DISK {_fmt_disk_gb_pair(latest.get('disk_used_gb'), latest.get('disk_gb'))}  {chart_label}",
-        fill=INK,
-        font=fonts.tiny,
+        fonts.tiny,
+        INK,
     )
 
 
@@ -130,7 +219,7 @@ def _draw_container_table(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str
     total_cpu = sum(float(item.get("cpu_percent") or 0) for item in containers)
     total_mem = sum(float(item.get("memory_mb") or 0) for item in containers)
 
-    draw.text((2, 136), "CONTAINERS", fill=INK, font=fonts.medium)
+    _draw_text(draw, (2, 136), "CONTAINERS", fonts.medium, INK)
     summary = [("RUN", str(len(containers))), ("CPU", f"{total_cpu:.1f}%"), ("MEM", _fmt_mb(total_mem))]
     widths = [_chip_width(fonts, label, value) for label, value in summary]
     x = 397 - sum(widths) - 12 * (len(widths) - 1)
@@ -145,24 +234,24 @@ def _draw_container_table(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str
     draw.line((left, bottom - 1, right, bottom - 1), fill=INK)
     cols = {"name": 8, "cpu": 184, "mem": 234, "port": 292, "status": 344}
     for key, label in [("name", "NAME"), ("cpu", "CPU"), ("mem", "MEM"), ("port", "PORT"), ("status", "STATUS")]:
-        draw.text((cols[key], top + 4), label, fill=INK, font=fonts.small)
+        _draw_text(draw, (cols[key], top + 4), label, fonts.small, INK)
 
     row_y = header_y + 5
     row_step = 17
     max_rows = max(0, (bottom - row_y - 4) // row_step)
     for item in containers[:max_rows]:
-        draw.text((cols["name"], row_y), _clip_to_width(str(item.get("name") or "--"), fonts.small, cols["cpu"] - cols["name"] - 6), fill=INK, font=fonts.small)
-        draw.text((cols["cpu"], row_y), _fmt_pct(item.get("cpu_percent")), fill=INK, font=fonts.small)
-        draw.text((cols["mem"], row_y), _fmt_mb(item.get("memory_mb")), fill=INK, font=fonts.small)
-        draw.text((cols["port"], row_y), _clip_to_width(_port_label(item.get("ports")), fonts.small, cols["status"] - cols["port"] - 6), fill=INK, font=fonts.small)
-        draw.text((cols["status"], row_y), _clip_to_width(_status_label(item.get("status")), fonts.small, right - cols["status"] - 6), fill=INK, font=fonts.small)
+        _draw_text(draw, (cols["name"], row_y), _clip_to_width(str(item.get("name") or "--"), fonts.small, cols["cpu"] - cols["name"] - 6), fonts.small, INK)
+        _draw_text(draw, (cols["cpu"], row_y), _fmt_pct(item.get("cpu_percent")), fonts.small, INK)
+        _draw_text(draw, (cols["mem"], row_y), _fmt_mb(item.get("memory_mb")), fonts.small, INK)
+        _draw_text(draw, (cols["port"], row_y), _clip_to_width(_port_label(item.get("ports")), fonts.small, cols["status"] - cols["port"] - 6), fonts.small, INK)
+        _draw_text(draw, (cols["status"], row_y), _clip_to_width(_status_label(item.get("status")), fonts.small, right - cols["status"] - 6), fonts.small, INK)
         row_y += row_step
 
 
 def _panel(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, title: str, value: str, values: list[Any]) -> None:
     draw.rectangle((x, y, x + w, y + h), outline=INK)
     draw.line((x, y + 20, x + w, y + 20), fill=INK)
-    draw.text((x + 6, y + 4), title, fill=INK, font=fonts.tiny)
+    _draw_text(draw, (x + 6, y + 4), title, fonts.tiny, INK)
     _right_text(draw, x + w - 6, y + 4, value, fonts.tiny, INK)
     _sparkline(draw, x + 8, y + 32, w - 16, h - 39, values)
 
@@ -222,48 +311,35 @@ def _encode_frame(img: Image.Image) -> RenderedFrame:
     return RenderedFrame(img, bytes(black), bytes(red))
 
 
-def _load_font(size: int, font_name: str = "mono") -> ImageFont.ImageFont:
-    profiles = {
-        "mono": [
-            "C:/Windows/Fonts/consolab.ttf",
-            "C:/Windows/Fonts/consola.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationMono-Bold.ttf",
-        ],
-        "sans": [
-            "C:/Windows/Fonts/arialbd.ttf",
-            "C:/Windows/Fonts/arial.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        ],
-        "serif": [
-            "C:/Windows/Fonts/timesbd.ttf",
-            "C:/Windows/Fonts/times.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
-        ],
-    }
-    candidates = [Path(path) for path in profiles.get(font_name, profiles["mono"])]
-    for path in candidates:
-        if path.exists():
-            return ImageFont.truetype(str(path), size=size)
-    return ImageFont.load_default()
+def _load_font(role: str, font_name: str = "pixel", size_delta: int = 0) -> BitmapFont:
+    base = {
+        "tiny": 1,
+        "small": 2,
+        "medium": 2,
+        "large": 3,
+        "clock": 4,
+    }.get(role, 2)
+    scale = max(1, min(5, base + size_delta))
+    if font_name == "narrow":
+        return BitmapFont(scale=scale, x_scale=max(1, scale - 1), spacing=1, weight=1)
+    if font_name == "wide":
+        return BitmapFont(scale=scale, x_scale=scale + 1, spacing=2, weight=1)
+    if font_name == "bold":
+        return BitmapFont(scale=scale, x_scale=scale, spacing=2, weight=2)
+    return BitmapFont(scale=scale, x_scale=scale, spacing=2, weight=1)
 
 
 def _info_chip(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, label: str, value: str) -> None:
     draw.rectangle((x, y, x + w, y + h), outline=INK)
     text_y = y + (h - _font_height(fonts.tiny)) // 2
-    draw.text((x + 5, text_y), label, fill=SOFT_INK, font=fonts.tiny)
+    _draw_text(draw, (x + 5, text_y), label, fonts.tiny, SOFT_INK)
     _right_text(draw, x + w - 5, text_y, value, fonts.tiny, INK)
 
 
 def _small_box(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, text: str) -> None:
     h = 24
     draw.rectangle((x, y, x + w, y + h), outline=INK)
-    draw.text((x + 5, y + (h - _font_height(fonts.tiny)) // 2), text, fill=INK, font=fonts.tiny)
+    _draw_text(draw, (x + 5, y + (h - _font_height(fonts.tiny)) // 2), text, fonts.tiny, INK)
 
 
 def _chip_width(fonts: Fonts, label: str, value: str) -> int:
@@ -349,17 +425,20 @@ def _fmt_mb(value: Any) -> str:
     return f"{number / 1024:.1f}G" if number >= 1024 else f"{number:.0f}M"
 
 
-def _right_text(draw: ImageDraw.ImageDraw, right: int, y: int, text: str, font: ImageFont.ImageFont, fill: tuple[int, int, int]) -> None:
+def _draw_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, font: BitmapFont, fill: tuple[int, int, int]) -> None:
+    font.draw(draw, pos, str(text), fill)
+
+
+def _right_text(draw: ImageDraw.ImageDraw, right: int, y: int, text: str, font: BitmapFont, fill: tuple[int, int, int]) -> None:
     width, _ = _text_size(font, str(text))
-    draw.text((right - width, y), text, fill=fill, font=font)
+    _draw_text(draw, (right - width, y), text, font, fill)
 
 
-def _text_size(font: ImageFont.ImageFont, text: str) -> tuple[int, int]:
-    bbox = ImageDraw.Draw(Image.new("1", (1, 1))).textbbox((0, 0), str(text), font=font)
-    return max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
+def _text_size(font: BitmapFont, text: str) -> tuple[int, int]:
+    return font.measure(str(text))
 
 
-def _font_height(font: ImageFont.ImageFont) -> int:
+def _font_height(font: BitmapFont) -> int:
     return _text_size(font, "Ag")[1]
 
 
@@ -419,7 +498,7 @@ def _clip(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[: max(0, limit - 1)] + "."
 
 
-def _clip_to_width(value: str, font: ImageFont.ImageFont, width: int) -> str:
+def _clip_to_width(value: str, font: BitmapFont, width: int) -> str:
     text = str(value)
     if _text_size(font, text)[0] <= width:
         return text
@@ -429,16 +508,40 @@ def _clip_to_width(value: str, font: ImageFont.ImageFont, width: int) -> str:
     return (text + suffix) if text else suffix
 
 
-def _wrapped_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, width: int, font: ImageFont.ImageFont, fill: tuple[int, int, int], line_height: int) -> None:
+def _wrapped_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, width: int, font: BitmapFont, fill: tuple[int, int, int], line_height: int) -> None:
     x, y = pos
     line = ""
     for word in text.split():
         trial = f"{line} {word}".strip()
         if len(trial) > width:
-            draw.text((x, y), line, fill=fill, font=font)
+            _draw_text(draw, (x, y), line, font, fill)
             y += line_height
             line = word
         else:
             line = trial
     if line:
-        draw.text((x, y), line, fill=fill, font=font)
+        _draw_text(draw, (x, y), line, font, fill)
+
+
+def _bitmap_text(text: Any) -> str:
+    out = []
+    for ch in str(text).upper():
+        if ch in _GLYPHS_5X7:
+            out.append(ch)
+        elif ch.isascii() and ch.isalpha():
+            out.append(ch)
+        elif ch in {"⬇", "↓"}:
+            out.append("V")
+        else:
+            out.append("?")
+    return "".join(out)
+
+
+def _timezone(snapshot: dict[str, Any]) -> ZoneInfo:
+    name = str((snapshot.get("display") or {}).get("timezone") or "Asia/Shanghai")
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("Asia/Shanghai")
+
+
