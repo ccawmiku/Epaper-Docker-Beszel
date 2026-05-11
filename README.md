@@ -1,6 +1,6 @@
 # ESP32-C3 墨水屏 NAS 状态屏
 
-版本：`0.1.2`
+版本：`0.1.3`
 
 这个项目把 ESP32-C3 作为纯显示端使用：NAS 上的 Docker 服务负责连接 Beszel、渲染 400x300 的墨水屏画面，并输出统一的 `frame.bin`。浏览器预览页和 ESP32-C3 都读取同一个 `frame.bin`，所以网页预览和真实墨水屏显示尽量保持一致。
 
@@ -80,7 +80,7 @@ docker compose up -d
 推送到 GitHub 后，Actions 会发布：
 
 ```text
-ghcr.io/ccawmiku/epaper-nas-display:0.1.2
+ghcr.io/ccawmiku/epaper-nas-display:0.1.3
 ghcr.io/ccawmiku/epaper-nas-display:latest
 ```
 
@@ -89,7 +89,7 @@ NAS 上运行：
 ```bash
 cd server
 cp .env.example .env
-export EPAPER_IMAGE=ghcr.io/ccawmiku/epaper-nas-display:0.1.2
+export EPAPER_IMAGE=ghcr.io/ccawmiku/epaper-nas-display:0.1.3
 docker compose -f docker-compose.image.yml up -d
 ```
 

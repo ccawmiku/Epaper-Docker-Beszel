@@ -44,18 +44,21 @@ class RenderedFrame:
 
 
 class Fonts:
-    def __init__(self) -> None:
-        self.tiny = _load_font(12)
-        self.small = _load_font(14)
-        self.medium = _load_font(16)
-        self.large = _load_font(20)
-        self.clock = _load_font(24)
+    def __init__(self, font_name: str = "mono", size_delta: int = 0) -> None:
+        self.name = font_name
+        self.delta = max(-3, min(4, int(size_delta or 0)))
+        self.tiny = _load_font(12 + self.delta, self.name)
+        self.small = _load_font(14 + self.delta, self.name)
+        self.medium = _load_font(16 + self.delta, self.name)
+        self.large = _load_font(20 + self.delta, self.name)
+        self.clock = _load_font(24 + self.delta, self.name)
 
 
 def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
     img = Image.new("RGB", (EPD_WIDTH, EPD_HEIGHT), PAPER)
     draw = ImageDraw.Draw(img)
-    fonts = Fonts()
+    display = snapshot.get("display") if isinstance(snapshot.get("display"), dict) else {}
+    fonts = Fonts(str(display.get("font_name") or "mono"), int(display.get("font_size") or 0))
     systems = snapshot.get("systems") or []
     active_id = (snapshot.get("display") or {}).get("active_system_id")
     nas = _find_system_id(systems, active_id) or _find_system(systems, "NAS") or (systems[0] if systems else {})
@@ -146,7 +149,7 @@ def _draw_container_table(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str
 
     row_y = header_y + 5
     row_step = 17
-    max_rows = max(0, (bottom - row_y - 2) // row_step + 1)
+    max_rows = max(0, (bottom - row_y - 4) // row_step)
     for item in containers[:max_rows]:
         draw.text((cols["name"], row_y), _clip_to_width(str(item.get("name") or "--"), fonts.small, cols["cpu"] - cols["name"] - 6), fill=INK, font=fonts.small)
         draw.text((cols["cpu"], row_y), _fmt_pct(item.get("cpu_percent")), fill=INK, font=fonts.small)
@@ -219,13 +222,31 @@ def _encode_frame(img: Image.Image) -> RenderedFrame:
     return RenderedFrame(img, bytes(black), bytes(red))
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    candidates = [
-        Path("C:/Windows/Fonts/consolab.ttf"),
-        Path("C:/Windows/Fonts/consola.ttf"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
-    ]
+def _load_font(size: int, font_name: str = "mono") -> ImageFont.ImageFont:
+    profiles = {
+        "mono": [
+            "C:/Windows/Fonts/consolab.ttf",
+            "C:/Windows/Fonts/consola.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationMono-Bold.ttf",
+        ],
+        "sans": [
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ],
+        "serif": [
+            "C:/Windows/Fonts/timesbd.ttf",
+            "C:/Windows/Fonts/times.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
+        ],
+    }
+    candidates = [Path(path) for path in profiles.get(font_name, profiles["mono"])]
     for path in candidates:
         if path.exists():
             return ImageFont.truetype(str(path), size=size)
