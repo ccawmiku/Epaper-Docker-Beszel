@@ -16,6 +16,7 @@ _lock = Lock()
 class RuntimeConfig:
     display_interval_seconds: int = 60
     chart_minutes: int = 1440
+    system_modes: dict[str, str] | None = None
     force_refresh_seq: int = 0
     updated_at: str = ""
 
@@ -32,6 +33,8 @@ def update_runtime_config(patch: dict[str, Any]) -> RuntimeConfig:
             config.display_interval_seconds = _bounded_int(patch["display_interval_seconds"], 30, 3600, 60)
         if "chart_minutes" in patch:
             config.chart_minutes = _bounded_int(patch["chart_minutes"], 60, 1440, 1440)
+        if "system_modes" in patch:
+            config.system_modes = _clean_modes(patch["system_modes"])
         config.updated_at = datetime.now(timezone.utc).isoformat()
         _save_unlocked(config)
         return config
@@ -57,6 +60,7 @@ def _load_unlocked() -> RuntimeConfig:
     return RuntimeConfig(
         display_interval_seconds=_bounded_int(data.get("display_interval_seconds"), 30, 3600, 60),
         chart_minutes=_bounded_int(data.get("chart_minutes"), 60, 1440, 1440),
+        system_modes=_clean_modes(data.get("system_modes")),
         force_refresh_seq=_bounded_int(data.get("force_refresh_seq"), 0, 1000000000, 0),
         updated_at=str(data.get("updated_at") or ""),
     )
@@ -72,3 +76,14 @@ def _bounded_int(value: Any, low: int, high: int, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(low, min(high, number))
+
+
+def _clean_modes(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, mode in value.items():
+        if not key:
+            continue
+        out[str(key)] = "invert" if str(mode).lower() == "invert" else "normal"
+    return out

@@ -57,13 +57,16 @@ def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
     draw = ImageDraw.Draw(img)
     fonts = Fonts()
     systems = snapshot.get("systems") or []
-    nas = _find_system(systems, "NAS") or (systems[0] if systems else {})
-    router = _find_system(systems, "iStoreOS") or (systems[1] if len(systems) > 1 else {})
+    active_id = (snapshot.get("display") or {}).get("active_system_id")
+    nas = _find_system_id(systems, active_id) or _find_system(systems, "NAS") or (systems[0] if systems else {})
+    router = _other_system(systems, nas) or _find_system(systems, "iStoreOS") or (systems[1] if len(systems) > 1 else {})
     _draw_header(draw, fonts, nas, snapshot)
     _draw_metric_panels(draw, fonts, nas, router)
     _draw_container_table(draw, fonts, nas)
     if snapshot.get("errors"):
         draw.text((340, 288), f"{len(snapshot['errors'])} ERR", fill=INK, font=fonts.tiny)
+    if (snapshot.get("display") or {}).get("invert"):
+        _invert_black_white(img)
     return _encode_frame(img)
 
 
@@ -110,9 +113,9 @@ def _draw_header(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], s
 
 def _draw_metric_panels(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], router: dict[str, Any]) -> None:
     panels = [
-        (2, 73, 126, 54, "NAS CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
-        (140, 73, 126, 54, "NAS MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
-        (278, 73, 120, 54, "ROUTER", router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
+        (2, 70, 126, 54, f"{_short_system_name(nas)} CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
+        (140, 70, 126, 54, f"{_short_system_name(nas)} MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
+        (278, 70, 120, 54, _short_system_name(router), router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
     ]
     for x, y, w, h, title, values, value in panels:
         _panel(draw, fonts, x, y, w, h, title, value, values)
@@ -124,15 +127,15 @@ def _draw_container_table(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str
     total_cpu = sum(float(item.get("cpu_percent") or 0) for item in containers)
     total_mem = sum(float(item.get("memory_mb") or 0) for item in containers)
 
-    draw.text((2, 139), "CONTAINERS", fill=INK, font=fonts.medium)
+    draw.text((2, 136), "CONTAINERS", fill=INK, font=fonts.medium)
     summary = [("RUN", str(len(containers))), ("CPU", f"{total_cpu:.1f}%"), ("MEM", _fmt_mb(total_mem))]
     widths = [_chip_width(fonts, label, value) for label, value in summary]
     x = 397 - sum(widths) - 12 * (len(widths) - 1)
     for (label, value), width in zip(summary, widths):
-        _info_chip(draw, fonts, x, 134, width, 24, label, value)
+        _info_chip(draw, fonts, x, 131, width, 24, label, value)
         x += width + 12
 
-    left, top, right, bottom = 2, 170, 397, 297
+    left, top, right, bottom = 2, 166, 397, 297
     header_y = top + 22
     draw.rectangle((left, top, right, bottom), outline=INK)
     draw.line((left, header_y, right, header_y), fill=INK)
@@ -255,6 +258,38 @@ def _find_system(systems: list[dict[str, Any]], name_part: str) -> dict[str, Any
         if needle in name:
             return item
     return None
+
+
+def _find_system_id(systems: list[dict[str, Any]], system_id: Any) -> dict[str, Any] | None:
+    if not system_id:
+        return None
+    for item in systems:
+        if str((item.get("system") or {}).get("id") or "") == str(system_id):
+            return item
+    return None
+
+
+def _other_system(systems: list[dict[str, Any]], current: dict[str, Any]) -> dict[str, Any] | None:
+    current_id = (current.get("system") or {}).get("id")
+    for item in systems:
+        if (item.get("system") or {}).get("id") != current_id:
+            return item
+    return None
+
+
+def _short_system_name(system: dict[str, Any]) -> str:
+    name = str((system.get("system") or {}).get("name") or "SYS").upper()
+    return _clip(name.replace("ISTOREOS-", "R"), 8)
+
+
+def _invert_black_white(img: Image.Image) -> None:
+    pixels = img.load()
+    for y in range(EPD_HEIGHT):
+        for x in range(EPD_WIDTH):
+            r, g, b = pixels[x, y]
+            if r > 130 and g < 90 and b < 90:
+                continue
+            pixels[x, y] = PAPER if (r + g + b) < 690 else INK
 
 
 def _system_alert(system: dict[str, Any], latest: dict[str, Any]) -> str:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException, Query
@@ -71,6 +72,27 @@ def beszel_systems() -> dict[str, object]:
     return {"items": systems}
 
 
+@app.get("/api/display/systems")
+def display_systems() -> dict[str, object]:
+    runtime = load_runtime_config()
+    try:
+        systems = get_beszel_client().get_all("systems", filter_query=None, sort="name")
+    except (BeszelConfigError, BeszelApiError) as exc:
+        raise _beszel_error(exc) from exc
+    modes = _display_modes_for(systems, runtime)
+    return {
+        "items": [
+            {
+                "id": item.get("id"),
+                "name": item.get("name") or item.get("host") or item.get("id"),
+                "status": item.get("status"),
+                "mode": modes.get(str(item.get("id")), "normal"),
+            }
+            for item in systems
+        ]
+    }
+
+
 @app.get("/api/beszel/snapshot")
 def beszel_snapshot(
     minutes: int = Query(default=settings.beszel_history_minutes, ge=1, le=1440),
@@ -121,12 +143,13 @@ def preview() -> str:
 <style>
 body{{margin:0;background:#d9d1bd;color:#24221c;font-family:ui-monospace,Consolas,monospace}}
 main{{display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}}
-.controls{{width:{EPD_WIDTH}px;display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:8px;align-items:end;margin-bottom:10px;font-size:12px}}
+.controls{{width:{EPD_WIDTH}px;display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:end;margin-bottom:10px;font-size:12px}}
 label{{display:grid;gap:3px}}
-input,button{{font:inherit;border:1px solid #24221c;background:#f6f2de;padding:4px 8px;min-width:0}}
-input[type=checkbox]{{min-width:auto;accent-color:#24221c}}
-.check{{display:flex;align-items:center;gap:6px;border:1px solid #24221c;background:#f6f2de;padding:4px 8px;height:26px;box-sizing:border-box}}
+input,button,select{{font:inherit;border:1px solid #24221c;background:#f6f2de;padding:4px 8px;min-width:0}}
 button{{cursor:pointer}}
+.systems{{width:{EPD_WIDTH}px;display:grid;gap:4px;margin:0 0 10px;font-size:12px}}
+.system-row{{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}}
+.system-row span{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .bar,.meta{{width:{EPD_WIDTH}px;display:flex;align-items:center;justify-content:space-between;font-size:12px}}
 .bar{{margin-bottom:8px}}
 .meta{{margin-top:8px;font-size:11px}}
@@ -138,9 +161,9 @@ a{{color:#24221c}}
 <div class="controls">
   <label>刷新间隔/秒<input id="interval" type="number" min="30" max="3600" step="30"></label>
   <label>折线时间/分钟<input id="chart" type="number" min="60" max="1440" step="60"></label>
-  <label class="check">invert<input id="invert" type="checkbox"></label>
   <button id="save">save</button><button id="force">force</button>
 </div>
+<div class="systems" id="systems"></div>
 <div class="bar"><span>EPD preview: {EPD_WIDTH}x{EPD_HEIGHT}, decoded from frame.bin</span><button id="refresh">refresh</button></div>
 <div class="shell"><canvas id="screen" width="{EPD_WIDTH}" height="{EPD_HEIGHT}"></canvas></div>
 <div class="meta"><span id="status">loading</span><a href="/frame.bin">frame.bin</a><a href="/screen.png">screen.png</a><a href="/api/display/data">data</a></div>
@@ -148,9 +171,9 @@ a{{color:#24221c}}
 <script>
 const W={EPD_WIDTH}, H={EPD_HEIGHT}, HEADER=15;
 const canvas=document.getElementById('screen'), ctx=canvas.getContext('2d'), statusEl=document.getElementById('status');
-const intervalInput=document.getElementById('interval'), chartInput=document.getElementById('chart'), invertInput=document.getElementById('invert');
+const intervalInput=document.getElementById('interval'), chartInput=document.getElementById('chart'), systemsEl=document.getElementById('systems');
 const paper=[246,242,222,255], ink=[36,34,28,255], red=[176,28,22,255];
-let settings={{display_interval_seconds:60,chart_minutes:1440,force_refresh_seq:0}}, timer=null, inverted=false;
+let settings={{display_interval_seconds:60,chart_minutes:1440,system_modes:{{}},force_refresh_seq:0}}, timer=null;
 function bit(bytes,index){{return (bytes[index>>3]&(0x80>>(index&7)))!==0}}
 async function drawFrame(){{
   statusEl.textContent='loading frame.bin';
@@ -164,7 +187,7 @@ async function drawFrame(){{
   const img=ctx.createImageData(W,H);
   for(let i=0;i<W*H;i++){{
     const isRed=bit(redPlane,i), isBlack=bit(black,i);
-    const color=isRed?red:(isBlack?(inverted?paper:ink):(inverted?ink:paper)), p=i*4;
+    const color=isRed?red:(isBlack?ink:paper), p=i*4;
     img.data[p]=color[0]; img.data[p+1]=color[1]; img.data[p+2]=color[2]; img.data[p+3]=255;
   }}
   ctx.putImageData(img,0,0);
@@ -172,18 +195,35 @@ async function drawFrame(){{
 }}
 async function loadSettings(){{
   const res=await fetch('/api/admin/settings',{{cache:'no-store'}});
-  settings=await res.json(); intervalInput.value=settings.display_interval_seconds; chartInput.value=settings.chart_minutes; resetTimer();
+  settings=await res.json(); intervalInput.value=settings.display_interval_seconds; chartInput.value=settings.chart_minutes; await loadSystems(); resetTimer();
+}}
+async function loadSystems(){{
+  const res=await fetch('/api/display/systems',{{cache:'no-store'}});
+  const data=await res.json();
+  systemsEl.innerHTML='';
+  for(const item of data.items){{
+    const row=document.createElement('div'); row.className='system-row';
+    const name=document.createElement('span'); name.textContent=`${{item.name}} · ${{item.status||'--'}}`;
+    const select=document.createElement('select'); select.dataset.systemId=item.id;
+    select.innerHTML='<option value="normal">normal</option><option value="invert">invert</option>';
+    select.value=(settings.system_modes&&settings.system_modes[item.id])||item.mode||'normal';
+    row.append(name,select); systemsEl.append(row);
+  }}
+}}
+function collectModes(){{
+  const modes={{}};
+  for(const select of systemsEl.querySelectorAll('select[data-system-id]')) modes[select.dataset.systemId]=select.value;
+  return modes;
 }}
 async function saveSettings(){{
-  const res=await fetch('/api/admin/settings',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{display_interval_seconds:Number(intervalInput.value),chart_minutes:Number(chartInput.value)}})}});
-  settings=await res.json(); intervalInput.value=settings.display_interval_seconds; chartInput.value=settings.chart_minutes; resetTimer(); await drawFrame();
+  const res=await fetch('/api/admin/settings',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{display_interval_seconds:Number(intervalInput.value),chart_minutes:Number(chartInput.value),system_modes:collectModes()}})}});
+  settings=await res.json(); intervalInput.value=settings.display_interval_seconds; chartInput.value=settings.chart_minutes; await loadSystems(); resetTimer(); await drawFrame();
 }}
 async function forceRefresh(){{const res=await fetch('/api/admin/force-refresh',{{method:'POST'}}); settings=await res.json(); await drawFrame()}}
 function resetTimer(){{if(timer)clearInterval(timer); timer=setInterval(()=>drawFrame().catch(e=>statusEl.textContent=e.message),settings.display_interval_seconds*1000)}}
 document.getElementById('refresh').onclick=()=>drawFrame().catch(e=>statusEl.textContent=e.message);
 document.getElementById('save').onclick=()=>saveSettings().catch(e=>statusEl.textContent=e.message);
 document.getElementById('force').onclick=()=>forceRefresh().catch(e=>statusEl.textContent=e.message);
-invertInput.onchange=()=>{{inverted=invertInput.checked; drawFrame().catch(e=>statusEl.textContent=e.message)}};
 loadSettings().then(drawFrame).catch(e=>statusEl.textContent=e.message);
 </script></html>
 """
@@ -211,8 +251,9 @@ def device_config() -> dict[str, object]:
 
 
 def _display_snapshot(minutes: int) -> dict[str, object]:
+    runtime = load_runtime_config()
     record_type, sample_count = _beszel_chart_window(minutes)
-    return get_beszel_client().snapshot(
+    snapshot = get_beszel_client().snapshot(
         names=getattr(settings, "beszel_system_names", []),
         ids=getattr(settings, "beszel_system_ids", []),
         minutes=minutes,
@@ -220,6 +261,31 @@ def _display_snapshot(minutes: int) -> dict[str, object]:
         container_minutes=1,
         record_type=record_type,
     )
+    _apply_display_rotation(snapshot, runtime)
+    return snapshot
+
+
+def _display_modes_for(systems: list[dict[str, object]], runtime) -> dict[str, str]:
+    modes = dict(runtime.system_modes or {})
+    for index, item in enumerate(systems):
+        system_id = str(item.get("id") or "")
+        if system_id and system_id not in modes:
+            modes[system_id] = "invert" if index == 1 else "normal"
+    return modes
+
+
+def _apply_display_rotation(snapshot: dict[str, object], runtime) -> None:
+    systems = snapshot.get("systems")
+    if not isinstance(systems, list) or not systems:
+        snapshot["display"] = {"active_system_id": "", "invert": False, "mode": "normal"}
+        return
+    source_systems = [(item.get("system") or {}) for item in systems if isinstance(item, dict)]
+    modes = _display_modes_for(source_systems, runtime)
+    index = (int(time.time()) // max(1, int(runtime.display_interval_seconds)) + int(runtime.force_refresh_seq)) % len(systems)
+    active = systems[index] if isinstance(systems[index], dict) else {}
+    active_id = str((active.get("system") or {}).get("id") or "")
+    mode = modes.get(active_id, "normal")
+    snapshot["display"] = {"active_system_id": active_id, "invert": mode == "invert", "mode": mode}
 
 
 def _beszel_chart_window(minutes: int) -> tuple[str, int]:
