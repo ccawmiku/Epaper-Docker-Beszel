@@ -42,7 +42,7 @@ def update_runtime_config(patch: dict[str, Any]) -> RuntimeConfig:
         if "font_name" in patch:
             config.font_name = _clean_font_name(patch["font_name"])
         if "font_size" in patch:
-            config.font_size = _bounded_int(patch["font_size"], -1, 2, 0)
+            config.font_size = _bounded_int(patch["font_size"], 0, 2, 0)
         if "timezone" in patch:
             config.timezone = _clean_timezone(patch["timezone"])
         config.updated_at = datetime.now(timezone.utc).isoformat()
@@ -67,12 +67,14 @@ def _load_unlocked() -> RuntimeConfig:
             data = {}
     else:
         data = {}
+    raw_font_size = data.get("font_size")
+    font_size_val = 0 if (raw_font_size is None or raw_font_size == -1) else _bounded_int(raw_font_size, 0, 2, 0)
     return RuntimeConfig(
         display_interval_seconds=_bounded_int(data.get("display_interval_seconds"), 30, 3600, 60),
         chart_minutes=_bounded_int(data.get("chart_minutes"), 60, 1440, 1440),
         system_modes=_clean_modes(data.get("system_modes")),
         font_name=_clean_font_name(data.get("font_name")),
-        font_size=_bounded_int(data.get("font_size"), -1, 2, 0),
+        font_size=font_size_val,
         timezone=_clean_timezone(data.get("timezone")),
         force_refresh_seq=_bounded_int(data.get("force_refresh_seq"), 0, 1000000000, 0),
         updated_at=str(data.get("updated_at") or ""),
@@ -98,7 +100,13 @@ def _clean_modes(value: Any) -> dict[str, str]:
     for key, mode in value.items():
         if not key:
             continue
-        out[str(key)] = "invert" if str(mode).lower() == "invert" else "normal"
+        m = str(mode).lower()
+        if m in {"disabled", "off", "none", "false"}:
+            out[str(key)] = "disabled"
+        elif m in {"invert", "inverted"}:
+            out[str(key)] = "invert"
+        else:
+            out[str(key)] = "normal"
     return out
 
 

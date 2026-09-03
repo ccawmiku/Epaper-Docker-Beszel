@@ -20,10 +20,10 @@ static const char* WIFI_SSID = "YOUR_WIFI_SSID";
 static const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 static const char* OTA_HOSTNAME = "esp32c3-epaper";
 
-// UDP 广播监听端口（默认与服务端一致为 15002）
+// UDP 广播监听端口
 #define UDP_BROADCAST_PORT 15002
 
-// 默认备用服务器地址（留空则完全依靠局域网 UDP 广播宣告自动绑定）
+// 默认备用服务器地址（若留空则依靠局域网 UDP 广播自动配对）
 static const char* DEFAULT_FALLBACK_URL = "";
 
 static const int EPD_W = 400;
@@ -32,7 +32,6 @@ static const int EPD_BYTES = EPD_W * EPD_H / 8;
 static const int FRAME_HEADER_BYTES = 15;
 static const int FRAME_TOTAL_BYTES = FRAME_HEADER_BYTES + EPD_BYTES * 2;
 
-// If red is inverted on the physical panel, change this to 1.
 #define RED_PLANE_INVERTED 0
 
 static uint8_t blackPlane[EPD_BYTES];
@@ -50,6 +49,75 @@ static Preferences prefs;
 static String serverBaseUrl = "";
 static bool hasServerUrl = false;
 static bool udpListening = false;
+static String lastErrorMessage = "";
+
+// 基础 5x7 ASCII 字符点阵表 (0x20..0x5F)
+static const uint8_t FONT_5X7[][5] PROGMEM = {
+  {0x00,0x00,0x00,0x00,0x00}, // space
+  {0x00,0x00,0x5F,0x00,0x00}, // !
+  {0x00,0x07,0x00,0x07,0x00}, // "
+  {0x14,0x7F,0x14,0x7F,0x14}, // #
+  {0x24,0x2A,0x7F,0x2A,0x12}, // $
+  {0x23,0x13,0x08,0x64,0x62}, // %
+  {0x36,0x49,0x55,0x22,0x50}, // &
+  {0x00,0x05,0x03,0x00,0x00}, // '
+  {0x00,0x1C,0x22,0x41,0x00}, // (
+  {0x00,0x41,0x22,0x1C,0x00}, // )
+  {0x14,0x08,0x3E,0x08,0x14}, // *
+  {0x08,0x08,0x3E,0x08,0x08}, // +
+  {0x00,0x50,0x30,0x00,0x00}, // ,
+  {0x08,0x08,0x08,0x08,0x08}, // -
+  {0x00,0x60,0x60,0x00,0x00}, // .
+  {0x20,0x10,0x08,0x04,0x02}, // /
+  {0x3E,0x51,0x49,0x45,0x3E}, // 0
+  {0x00,0x42,0x7F,0x40,0x00}, // 1
+  {0x42,0x61,0x51,0x49,0x46}, // 2
+  {0x21,0x41,0x45,0x4B,0x31}, // 3
+  {0x18,0x14,0x12,0x7F,0x10}, // 4
+  {0x27,0x45,0x45,0x45,0x39}, // 5
+  {0x3C,0x4A,0x49,0x49,0x30}, // 6
+  {0x01,0x71,0x09,0x05,0x03}, // 7
+  {0x36,0x49,0x49,0x49,0x36}, // 8
+  {0x06,0x49,0x49,0x29,0x1E}, // 9
+  {0x00,0x36,0x36,0x00,0x00}, // :
+  {0x00,0x56,0x36,0x00,0x00}, // ;
+  {0x08,0x14,0x22,0x41,0x00}, // <
+  {0x14,0x14,0x14,0x14,0x14}, // =
+  {0x00,0x41,0x22,0x14,0x08}, // >
+  {0x02,0x01,0x51,0x09,0x06}, // ?
+  {0x32,0x49,0x79,0x41,0x3E}, // @
+  {0x7E,0x11,0x11,0x11,0x7E}, // A
+  {0x7F,0x49,0x49,0x49,0x36}, // B
+  {0x3E,0x41,0x41,0x41,0x22}, // C
+  {0x7F,0x41,0x41,0x22,0x1C}, // D
+  {0x7F,0x49,0x49,0x49,0x41}, // E
+  {0x7F,0x09,0x09,0x09,0x01}, // F
+  {0x3E,0x41,0x49,0x49,0x7A}, // G
+  {0x7F,0x08,0x08,0x08,0x7F}, // H
+  {0x00,0x41,0x7F,0x41,0x00}, // I
+  {0x20,0x40,0x41,0x3F,0x01}, // J
+  {0x7F,0x08,0x14,0x22,0x41}, // K
+  {0x7F,0x40,0x40,0x40,0x40}, // L
+  {0x7F,0x02,0x0C,0x02,0x7F}, // M
+  {0x7F,0x04,0x08,0x10,0x7F}, // N
+  {0x3E,0x41,0x41,0x41,0x3E}, // O
+  {0x7F,0x09,0x09,0x09,0x06}, // P
+  {0x3E,0x41,0x51,0x21,0x5E}, // Q
+  {0x7F,0x09,0x19,0x29,0x46}, // R
+  {0x46,0x49,0x49,0x49,0x31}, // S
+  {0x01,0x01,0x7F,0x01,0x01}, // T
+  {0x3F,0x40,0x40,0x40,0x3F}, // U
+  {0x1F,0x20,0x40,0x20,0x1F}, // V
+  {0x3F,0x40,0x38,0x40,0x3F}, // W
+  {0x63,0x14,0x08,0x14,0x63}, // X
+  {0x07,0x08,0x70,0x08,0x07}, // Y
+  {0x61,0x51,0x49,0x45,0x43}, // Z
+  {0x00,0x7F,0x41,0x41,0x00}, // [
+  {0x02,0x04,0x08,0x10,0x20}, // \
+  {0x00,0x41,0x41,0x7F,0x00}, // ]
+  {0x04,0x02,0x01,0x02,0x04}, // ^
+  {0x40,0x40,0x40,0x40,0x40}, // _
+};
 
 void digitalWriteFast(int pin, int value) {
   digitalWrite(pin, value);
@@ -174,7 +242,6 @@ void updateFull() {
   powered = false;
 }
 
-// 批量优化传输反相数据块
 static void transferInverted(const uint8_t* src, size_t length) {
   uint8_t buffer[128];
   size_t offset = 0;
@@ -219,6 +286,70 @@ void displayFrame() {
   epdSleep();
 }
 
+// 诊断显示绘制相关函数
+void drawPixel(int x, int y, bool isRed, bool isBlack) {
+  if (x < 0 || x >= EPD_W || y < 0 || y >= EPD_H) return;
+  int idx = (y * EPD_W + x) / 8;
+  int bit = 7 - ((y * EPD_W + x) % 8);
+  if (isBlack) blackPlane[idx] |= (1 << bit);
+  else blackPlane[idx] &= ~(1 << bit);
+  if (isRed) redPlane[idx] |= (1 << bit);
+  else redPlane[idx] &= ~(1 << bit);
+}
+
+void drawChar(int x, int y, char c, bool isRed = false, int scale = 2) {
+  c = toupper(c);
+  if (c < 0x20 || c > '_') c = ' ';
+  int charIdx = c - 0x20;
+  for (int col = 0; col < 5; col++) {
+    uint8_t line = pgm_read_byte(&(FONT_5X7[charIdx][col]));
+    for (int row = 0; row < 7; row++) {
+      if (line & (1 << row)) {
+        for (int dx = 0; dx < scale; dx++) {
+          for (int dy = 0; dy < scale; dy++) {
+            drawPixel(x + col * scale + dx, y + row * scale + dy, isRed, !isRed);
+          }
+        }
+      }
+    }
+  }
+}
+
+void drawString(int x, int y, const char* str, bool isRed = false, int scale = 2) {
+  int curX = x;
+  int curY = y;
+  while (*str) {
+    if (*str == '\n') {
+      curY += 7 * scale + 4;
+      curX = x;
+    } else {
+      drawChar(curX, curY, *str, isRed, scale);
+      curX += 5 * scale + scale;
+    }
+    str++;
+  }
+}
+
+void clearPlanes() {
+  memset(blackPlane, 0x00, sizeof(blackPlane));
+  memset(redPlane, 0x00, sizeof(redPlane));
+}
+
+void displayDiagnosticScreen(const char* title, const char* line1, const char* line2, const char* line3, bool isError = false) {
+  clearPlanes();
+  for (int x = 20; x < EPD_W - 20; x++) {
+    for (int y = 14; y < 17; y++) drawPixel(x, y, isError, false);
+    for (int y = 56; y < 59; y++) drawPixel(x, y, isError, false);
+  }
+  drawString(28, 26, title, isError, 3);
+  drawString(28, 80, line1, false, 2);
+  drawString(28, 120, line2, false, 2);
+  drawString(28, 160, line3, isError, 2);
+  drawString(28, 230, "PAIR & LOGS ON WEB:", false, 1);
+  drawString(28, 248, "http://<ROUTER_IP>:17001/preview", isError, 2);
+  displayFrame();
+}
+
 bool readExact(WiFiClient* stream, uint8_t* buffer, size_t length) {
   size_t offset = 0;
   uint32_t start = millis();
@@ -237,16 +368,15 @@ bool readExact(WiFiClient* stream, uint8_t* buffer, size_t length) {
   return true;
 }
 
-// NVS 持久化管理
 void loadSavedServerUrl() {
   prefs.begin("epaper", false);
   serverBaseUrl = prefs.getString("server_url", DEFAULT_FALLBACK_URL);
   prefs.end();
   if (serverBaseUrl.length() > 0) {
     hasServerUrl = true;
-    Serial.printf("[CONFIG] 已从 NVS 加载服务器地址: %s\n", serverBaseUrl.c_str());
+    Serial.printf("[CONFIG] 从 NVS 加载已配对服务器: %s\n", serverBaseUrl.c_str());
   } else {
-    Serial.println("[CONFIG] NVS 中无已保存的服务器地址，正在等待局域网 UDP 广播...");
+    Serial.println("[CONFIG] NVS 中无服务器记录，等待局域网 UDP 广播...");
   }
 }
 
@@ -257,7 +387,7 @@ void saveServerUrl(const String& newUrl) {
   prefs.begin("epaper", false);
   prefs.putString("server_url", serverBaseUrl);
   prefs.end();
-  Serial.printf("[CONFIG] 服务器地址已更新并持久化至 NVS: %s\n", serverBaseUrl.c_str());
+  Serial.printf("[CONFIG] 服务器地址已持久化至 NVS: %s\n", serverBaseUrl.c_str());
 }
 
 String getFrameUrl() {
@@ -275,12 +405,16 @@ bool fetchFrame() {
 
   String url = getFrameUrl();
   HTTPClient http;
-  http.setTimeout(8000);
+  http.setTimeout(10000);
   Serial.printf("GET %s\n", url.c_str());
-  if (!http.begin(url)) return false;
+  if (!http.begin(url)) {
+    lastErrorMessage = "HTTP_BEGIN_FAILED";
+    return false;
+  }
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     Serial.printf("frame http error: %d\n", code);
+    lastErrorMessage = "HTTP_" + String(code);
     http.end();
     return false;
   }
@@ -288,6 +422,7 @@ bool fetchFrame() {
   int len = http.getSize();
   if (len > 0 && len != FRAME_TOTAL_BYTES) {
     Serial.printf("bad frame length: %d\n", len);
+    lastErrorMessage = "BAD_LEN_" + String(len);
     http.end();
     return false;
   }
@@ -296,6 +431,7 @@ bool fetchFrame() {
   uint8_t header[FRAME_HEADER_BYTES];
   if (!readExact(stream, header, sizeof(header))) {
     Serial.println("frame header timeout");
+    lastErrorMessage = "HEADER_TIMEOUT";
     http.end();
     return false;
   }
@@ -307,12 +443,14 @@ bool fetchFrame() {
             && header[9] == 2;
   if (!ok) {
     Serial.println("bad frame header");
+    lastErrorMessage = "INVALID_HEADER";
     http.end();
     return false;
   }
 
   if (!readExact(stream, blackPlane, EPD_BYTES) || !readExact(stream, redPlane, EPD_BYTES)) {
     Serial.println("frame body timeout");
+    lastErrorMessage = "BODY_TIMEOUT";
     http.end();
     return false;
   }
@@ -342,7 +480,7 @@ String extractString(const String& text, const char* key) {
     index++;
   }
   if (index >= text.length() || text[index] != '"') return "";
-  index++; // 跳过开头的引号
+  index++;
   int end = text.indexOf("\"", index);
   if (end < 0) return "";
   return text.substring(index, end);
@@ -379,9 +517,9 @@ bool pollDeviceConfig(bool* shouldRefresh) {
 void startUdpBroadcastListener() {
   if (udp.begin(UDP_BROADCAST_PORT)) {
     udpListening = true;
-    Serial.printf("[UDP] 广播监听已就绪，端口: %d\n", UDP_BROADCAST_PORT);
+    Serial.printf("[UDP] 正在监听广播端口: %d\n", UDP_BROADCAST_PORT);
   } else {
-    Serial.printf("[UDP] 启动广播监听失败，端口: %d\n", UDP_BROADCAST_PORT);
+    Serial.printf("[UDP] 监听端口 %d 失败!\n", UDP_BROADCAST_PORT);
   }
 }
 
@@ -401,7 +539,7 @@ bool processUdpBroadcast() {
   if (payload.indexOf("EPAPER_SERVER") >= 0) {
     String discoveredUrl = extractString(payload, "url");
     if (discoveredUrl.length() > 0) {
-      Serial.printf("[UDP] 成功解析服务端 URL: %s\n", discoveredUrl.c_str());
+      Serial.printf("[UDP] 成功解析服务端: %s\n", discoveredUrl.c_str());
       bool changed = (discoveredUrl != serverBaseUrl);
       saveServerUrl(discoveredUrl);
       return changed;
@@ -421,11 +559,11 @@ void connectWifi() {
   }
   Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("wifi ip: ");
+    Serial.print("WiFi 已连接，设备 IP: ");
     Serial.println(WiFi.localIP());
     startUdpBroadcastListener();
   } else {
-    Serial.println("wifi connect timeout, will retry in background");
+    Serial.println("WiFi 连接超时，将在后台自动重试");
   }
 }
 
@@ -442,7 +580,9 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  Serial.println("ESP32-C3 epaper frame client (UDP Broadcast Discovery)");
+  Serial.println("==================================================");
+  Serial.println("ESP32-C3 E-Paper Client (v0.1.5 with Diagnostics)");
+  Serial.println("==================================================");
 
   pinMode(PIN_CS, OUTPUT);
   pinMode(PIN_DC, OUTPUT);
@@ -460,28 +600,35 @@ void setup() {
   connectWifi();
   setupOta();
 
+  if (WiFi.status() != WL_CONNECTED) {
+    displayDiagnosticScreen("WIFI CONNECT FAILED", "CHECK SSID & PASSWORD IN INO", ("SSID: " + String(WIFI_SSID)).c_str(), "RETRYING IN BACKGROUND...", true);
+    return;
+  }
+
   if (hasServerUrl) {
     bool force = false;
     pollDeviceConfig(&force);
     if (fetchFrame()) {
       displayFrame();
       lastDisplayMs = millis();
+    } else {
+      displayDiagnosticScreen("CONNECT ERROR", ("SERVER: " + serverBaseUrl).c_str(), ("ERR: " + lastErrorMessage).c_str(), "CLICK 'BROADCAST' ON WEB", true);
     }
   } else {
-    Serial.println("等待服务端在网页端点击广播宣告...");
+    // 未配对时直接在墨水屏上显示引导画面，包含 IP 和广播监听端口！
+    displayDiagnosticScreen("WAITING BROADCAST", ("WIFI OK, IP: " + WiFi.localIP().toString()).c_str(), "LISTENING: UDP 15002", "CLICK 'BROADCAST' ON WEB", false);
   }
 }
 
 void loop() {
   ArduinoOTA.handle();
-
   uint32_t now = millis();
 
   // 非阻塞 WiFi 重连守护
   if (WiFi.status() != WL_CONNECTED) {
     if (now - lastWifiRetryMs > 10000UL) {
       lastWifiRetryMs = now;
-      Serial.println("WiFi 断开，尝试重连...");
+      Serial.println("[WIFI] 断开连接，尝试重连...");
       WiFi.reconnect();
     }
     delay(20);
@@ -490,21 +637,21 @@ void loop() {
     startUdpBroadcastListener();
   }
 
-  // 监听并解析 UDP 广播数据包
+  // 监听并解析 UDP 广播
   bool serverChanged = processUdpBroadcast();
 
-  // 如果刚收到新的服务器广播宣告，立即触发刷新
   if (serverChanged) {
-    Serial.println("[UDP] 服务器已更新，立即刷新屏幕数据...");
+    Serial.println("[UDP] 收到新服务器广播宣告，立即刷新屏幕...");
     bool force = false;
     pollDeviceConfig(&force);
     if (fetchFrame()) {
       displayFrame();
       lastDisplayMs = millis();
+    } else {
+      displayDiagnosticScreen("CONNECT ERROR", ("SERVER: " + serverBaseUrl).c_str(), ("ERR: " + lastErrorMessage).c_str(), "CHECK LOGS ON WEB", true);
     }
   }
 
-  // 仅在已拥有服务器地址时进行定时拉取与配置轮询
   if (hasServerUrl) {
     bool force = false;
     if (now - lastConfigPollMs > 10000UL) {
@@ -516,6 +663,8 @@ void loop() {
       if (fetchFrame()) {
         displayFrame();
         lastDisplayMs = millis();
+      } else {
+        Serial.printf("[FETCH] 拉取失败: %s\n", lastErrorMessage.c_str());
       }
     }
   }

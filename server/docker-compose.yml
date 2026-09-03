@@ -1,6 +1,6 @@
 services:
   epaper-nas-display:
-    image: ${EPAPER_IMAGE:-ghcr.io/ccawmiku/epaper-nas-display:0.1.5}
+    image: ${EPAPER_IMAGE:-ghcr.io/ccawmiku/epaper-nas-display:0.1.6}
     container_name: epaper-nas-display
     restart: unless-stopped
     env_file:
