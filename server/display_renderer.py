@@ -1,14 +1,13 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import io
-import struct
 from dataclasses import dataclass
 from datetime import datetime
+import io
+import math
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from PIL import Image, ImageDraw
-
 
 EPD_WIDTH = 400
 EPD_HEIGHT = 300
@@ -16,15 +15,82 @@ PLANE_BYTES = EPD_WIDTH * EPD_HEIGHT // 8
 
 PAPER = (246, 242, 222)
 INK = (36, 34, 28)
-SOFT_INK = (82, 78, 68)
+SOFT_INK = (108, 101, 86)
 RED = (176, 28, 22)
 
-CPU_RISK_PERCENT = 70.0
-CPU_DANGER_PERCENT = 90.0
-MEMORY_RISK_PERCENT = 80.0
-MEMORY_DANGER_PERCENT = 90.0
-LOAD_RISK_PER_CORE = 0.8
-LOAD_DANGER_PER_CORE = 1.2
+CPU_RISK_PERCENT = 80.0
+CPU_DANGER_PERCENT = 92.0
+MEMORY_RISK_PERCENT = 85.0
+MEMORY_DANGER_PERCENT = 94.0
+LOAD_RISK_PER_CORE = 1.5
+LOAD_DANGER_PER_CORE = 2.5
+
+_GLYPHS_5X7 = {
+    " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+    "!": ["00100", "00100", "00100", "00100", "00000", "00100", "00000"],
+    '"': ["01010", "01010", "01010", "00000", "00000", "00000", "00000"],
+    "#": ["01010", "11111", "01010", "01010", "11111", "01010", "00000"],
+    "$": ["00100", "01111", "10100", "01110", "00101", "11110", "00100"],
+    "%": ["11001", "11010", "00100", "01000", "01011", "10011", "00000"],
+    "&": ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
+    "'": ["00100", "00100", "01000", "00000", "00000", "00000", "00000"],
+    "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
+    ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
+    "*": ["00000", "01010", "00100", "11111", "00100", "01010", "00000"],
+    "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
+    ",": ["00000", "00000", "00000", "00000", "00100", "00100", "01000"],
+    "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+    ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
+    "/": ["00001", "00010", "00100", "01000", "10000", "00000", "00000"],
+    "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+    "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+    "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+    "3": ["11111", "00010", "00100", "00010", "00001", "10001", "01110"],
+    "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+    "5": ["11111", "10000", "11110", "00001", "00001", "10001", "01110"],
+    "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
+    "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+    "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+    "9": ["01110", "10001", "10001", "01111", "00001", "00010", "01100"],
+    ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
+    ";": ["00000", "01100", "01100", "00000", "01100", "01100", "10000"],
+    "<": ["00010", "00100", "01000", "10000", "01000", "00100", "00010"],
+    "=": ["00000", "11111", "00000", "11111", "00000", "00000", "00000"],
+    ">": ["01000", "00100", "00010", "00001", "00010", "00100", "01000"],
+    "?": ["01110", "10001", "00001", "00010", "00100", "00000", "00100"],
+    "@": ["01110", "10001", "00001", "01101", "10101", "10101", "01110"],
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "B": ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
+    "C": ["01110", "10001", "10000", "10000", "10000", "10001", "01110"],
+    "D": ["11100", "10010", "10001", "10001", "10001", "10010", "11100"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "G": ["01110", "10001", "10000", "10111", "10001", "10001", "01110"],
+    "H": ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+    "J": ["00001", "00001", "00001", "00001", "00001", "10001", "01110"],
+    "K": ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
+    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    "M": ["10001", "11011", "10101", "10001", "10001", "10001", "10001"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "Q": ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
+    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+    "S": ["01110", "10001", "10000", "01110", "00001", "10001", "01110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+    "W": ["10001", "10001", "10001", "10101", "10101", "11011", "10001"],
+    "X": ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
+    "Y": ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
+    "Z": ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
+    "[": ["01110", "01000", "01000", "01000", "01000", "01000", "01110"],
+    "\\": ["10000", "01000", "00100", "00010", "00001", "00000", "00000"],
+    "]": ["01110", "00010", "00010", "00010", "00010", "00010", "01110"],
+    "^": ["00100", "01010", "10001", "00000", "00000", "00000", "00000"],
+    "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"],
+}
 
 
 @dataclass(frozen=True)
@@ -34,74 +100,27 @@ class RenderedFrame:
     red_plane: bytes
 
     def to_bin(self) -> bytes:
-        header = b"EPD1" + struct.pack("<BHHBBI", 1, EPD_WIDTH, EPD_HEIGHT, 2, 0, len(self.black_plane))
-        return header + self.black_plane + self.red_plane
+        header = bytearray(15)
+        header[0:4] = b"EPD1"
+        header[4] = 1
+        header[5:7] = EPD_WIDTH.to_bytes(2, "little")
+        header[7:9] = EPD_HEIGHT.to_bytes(2, "little")
+        header[9] = 2
+        header[10] = 0
+        header[11:15] = PLANE_BYTES.to_bytes(4, "little")
+        return bytes(header) + self.black_plane + self.red_plane
 
     def to_png(self) -> bytes:
-        out = io.BytesIO()
-        self.image.save(out, format="PNG", optimize=True)
-        return out.getvalue()
-
-
-_GLYPHS_5X7 = {
-    " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
-    "!": ["00100", "00100", "00100", "00100", "00100", "00000", "00100"],
-    "%": ["11001", "11010", "00100", "01000", "10110", "00110", "00000"],
-    "&": ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
-    "(": ["00010", "00100", "01000", "01000", "01000", "00100", "00010"],
-    ")": ["01000", "00100", "00010", "00010", "00010", "00100", "01000"],
-    "+": ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
-    ",": ["00000", "00000", "00000", "00000", "00110", "00100", "01000"],
-    "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
-    ".": ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
-    "/": ["00001", "00010", "00100", "01000", "10000", "00000", "00000"],
-    ":": ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
-    "_": ["00000", "00000", "00000", "00000", "00000", "00000", "11111"],
-    "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
-    "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
-    "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
-    "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
-    "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
-    "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
-    "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
-    "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
-    "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
-    "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
-    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
-    "B": ["11110", "10001", "10001", "11110", "10001", "10001", "11110"],
-    "C": ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
-    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
-    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
-    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
-    "G": ["01111", "10000", "10000", "10011", "10001", "10001", "01111"],
-    "H": ["10001", "10001", "10001", "11111", "10001", "10001", "10001"],
-    "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
-    "J": ["00001", "00001", "00001", "00001", "10001", "10001", "01110"],
-    "K": ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
-    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
-    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
-    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
-    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
-    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
-    "Q": ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
-    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
-    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
-    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
-    "U": ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
-    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
-    "W": ["10001", "10001", "10001", "10101", "10101", "10101", "01010"],
-    "X": ["10001", "10001", "01010", "00100", "01010", "10001", "10001"],
-    "Y": ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
-    "Z": ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
-    "?": ["01110", "10001", "00001", "00010", "00100", "00000", "00100"],
-}
+        buf = io.BytesIO()
+        self.image.save(buf, format="PNG")
+        return buf.getvalue()
 
 
 @dataclass(frozen=True)
 class BitmapFont:
-    scale: int = 2
-    x_scale: int = 2
-    spacing: int = 2
+    scale: int = 1
+    x_scale: int = 1
+    spacing: int = 1
     weight: int = 1
 
     @property
@@ -131,31 +150,150 @@ class BitmapFont:
             x += len(glyph[0]) * self.x_scale + self.spacing
 
 
-class Fonts:
-    def __init__(self, font_name: str = "mono", size_delta: int = 0) -> None:
-        self.name = font_name
-        self.delta = max(-1, min(2, int(size_delta or 0)))
-        self.tiny = _load_font("tiny", self.name, self.delta)
-        self.small = _load_font("small", self.name, self.delta)
-        self.medium = _load_font("medium", self.name, self.delta)
-        self.large = _load_font("large", self.name, self.delta)
-        self.clock = _load_font("clock", self.name, self.delta)
+# 400x300 专属黄金比例字阶定义 (彻底固定，移除可调字号)
+FONT_TINY = BitmapFont(scale=1, x_scale=1, spacing=1, weight=1)       # 5x7 单倍紧凑清晰
+FONT_BOLD_TINY = BitmapFont(scale=1, x_scale=1, spacing=1, weight=2)  # 5x7 加粗
+FONT_MEDIUM = BitmapFont(scale=2, x_scale=2, spacing=1, weight=1)     # 10x14 标题与芯片
+FONT_CLOCK = BitmapFont(scale=3, x_scale=3, spacing=1, weight=2)      # 15x21 时钟大字
 
 
 def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
     img = Image.new("RGB", (EPD_WIDTH, EPD_HEIGHT), PAPER)
     draw = ImageDraw.Draw(img)
-    display = snapshot.get("display") if isinstance(snapshot.get("display"), dict) else {}
-    fonts = Fonts(str(display.get("font_name") or "mono"), int(display.get("font_size") or 0))
+
     systems = snapshot.get("systems") or []
     active_id = (snapshot.get("display") or {}).get("active_system_id")
+
     nas = _find_system_id(systems, active_id) or _find_system(systems, "NAS") or (systems[0] if systems else {})
     router = _other_system(systems, nas) or _find_system(systems, "iStoreOS") or (systems[1] if len(systems) > 1 else {})
-    _draw_header(draw, fonts, nas, snapshot)
-    _draw_metric_panels(draw, fonts, nas, router)
-    _draw_container_table(draw, fonts, nas)
-    if snapshot.get("errors"):
-        _draw_text(draw, (340, 288), f"{len(snapshot['errors'])} ERR", fonts.tiny, INK)
+
+    system = (nas or {}).get("system") or {}
+    latest = (nas or {}).get("latest") or {}
+    sys_name = _clip(str(system.get("name") or "DEVICE").upper(), 10)
+
+    # =========================================================================
+    # 1. 顶部 Header (y: 3 ~ 61)
+    # =========================================================================
+    alert = _system_alert(system, latest)
+    _draw_status_block(draw, 3, 3, 56, alert)
+
+    # 右侧时间卡片: LAST UPDATE + HH:MM (宽 96, x: 300 ~ 396, y: 3 ~ 59)
+    now = datetime.now(_timezone(snapshot))
+    draw.rectangle((300, 3, 396, 59), outline=INK, width=1)
+    _draw_center(draw, 300, 396, 7, "LAST UPDATE", FONT_TINY, SOFT_INK)
+    draw.line((305, 18, 391, 18), fill=SOFT_INK)
+    time_str = now.strftime("%H:%M")
+    _draw_center(draw, 300, 396, 26, time_str, FONT_CLOCK, INK)
+
+    # 中间信息芯片 (x: 63 ~ 296, 宽 233)
+    # 上排 3 芯片 (y: 3 ~ 29)
+    draw.rectangle((63, 3, 146, 29), outline=INK)
+    FONT_TINY.draw(draw, (67, 6), "HOST", SOFT_INK)
+    FONT_TINY.draw(draw, (67, 16), sys_name, INK)
+
+    temp_str = _temperature_label(latest.get("temperatures"))
+    draw.rectangle((150, 3, 218, 29), outline=INK)
+    FONT_TINY.draw(draw, (154, 6), "TEMP", SOFT_INK)
+    FONT_TINY.draw(draw, (154, 16), temp_str, INK)
+
+    load_str = _load_label(latest.get("load_average"))
+    draw.rectangle((222, 3, 296, 29), outline=INK)
+    FONT_TINY.draw(draw, (226, 6), "LOAD", SOFT_INK)
+    FONT_TINY.draw(draw, (226, 16), load_str, INK)
+
+    # 下排资源条 (y: 33 ~ 59)
+    draw.rectangle((63, 33, 296, 59), outline=INK)
+    mem_str = f"MEM: {_fmt_gb_pair(latest.get('memory_used_gb'), latest.get('memory_gb'))} ({_fmt_pct(latest.get('memory_percent'))})"
+    disk_str = f"DISK: {_fmt_disk_gb_pair(latest.get('disk_used_gb'), latest.get('disk_gb'))}"
+    FONT_TINY.draw(draw, (67, 36), mem_str, INK)
+    FONT_TINY.draw(draw, (67, 47), disk_str, INK)
+
+    draw.line((254, 33, 254, 59), fill=INK)
+    FONT_TINY.draw(draw, (259, 37), "RANGE", SOFT_INK)
+    FONT_TINY.draw(draw, (262, 47), "24H", INK)
+
+    # =========================================================================
+    # 2. 中间 3 监控波形卡片 (y: 63 ~ 125, 高 62)
+    # =========================================================================
+    cw = 128
+    gap = 6
+    r_name = _clip(str((router.get("system") or {}).get("name") or "SYS2").upper(), 8)
+    panels = [
+        (3, 63, cw, 62, f"{sys_name} CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
+        (3 + cw + gap, 63, cw, 62, f"{sys_name} MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
+        (3 + (cw + gap) * 2, 63, 396 - (3 + (cw + gap) * 2), 62, f"{r_name} CPU", router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
+    ]
+
+    for px, py, pw, ph, ptitle, pvals, pval in panels:
+        draw.rectangle((px, py, px + pw, py + ph), outline=INK)
+        draw.line((px, py + 18, px + pw, py + 18), fill=INK)
+        FONT_TINY.draw(draw, (px + 5, py + 6), ptitle, SOFT_INK)
+        vw = FONT_TINY.measure(pval)[0]
+        FONT_TINY.draw(draw, (px + pw - vw - 5, py + 6), pval, INK)
+        _sparkline(draw, px + 5, py + 22, pw - 10, ph - 28, pvals)
+
+    # =========================================================================
+    # 3. 底部 Docker 容器表格 (y: 129 ~ 297, 高 168) - 小字号精致版
+    # =========================================================================
+    containers = list((nas or {}).get("container_latest") or [])
+    containers.sort(key=lambda item: (float(item.get("cpu_percent") or 0), float(item.get("memory_mb") or 0)), reverse=True)
+    total_cpu = sum(float(item.get("cpu_percent") or 0) for item in containers)
+    total_mem = sum(float(item.get("memory_mb") or 0) for item in containers)
+
+    # 顶头条 (高度 18px)
+    draw.rectangle((3, 129, 396, 147), fill=INK)
+    FONT_TINY.draw(draw, (8, 134), "DOCKER CONTAINERS", PAPER)
+    stat_str = f"RUN:{len(containers)}  CPU:{total_cpu:.1f}%  MEM:{_fmt_mb(total_mem)}"
+    sw = FONT_TINY.measure(stat_str)[0]
+    FONT_TINY.draw(draw, (391 - sw, 134), stat_str, PAPER)
+
+    # 表格主框
+    t_top = 147
+    t_bottom = 297
+    draw.rectangle((3, t_top, 396, t_bottom), outline=INK)
+
+    # 5 列小字标准布局 (宽敞舒适，可容纳完整容器名，绝不溢出):
+    col_x = {"name": 8, "cpu": 168, "mem": 218, "port": 276, "status": 340}
+
+    header_h = 16
+    draw.rectangle((3, t_top, 396, t_top + header_h), fill=PAPER, outline=INK)
+    FONT_BOLD_TINY.draw(draw, (col_x["name"], t_top + 5), "NAME", INK)
+    FONT_BOLD_TINY.draw(draw, (col_x["cpu"], t_top + 5), "CPU", INK)
+    FONT_BOLD_TINY.draw(draw, (col_x["mem"], t_top + 5), "MEM", INK)
+    FONT_BOLD_TINY.draw(draw, (col_x["port"], t_top + 5), "PORT", INK)
+    FONT_BOLD_TINY.draw(draw, (col_x["status"], t_top + 5), "STATUS", INK)
+
+    # 数据行: 小字号高 7px，行距 14px，视觉清爽精致
+    row_y = t_top + header_h + 3
+    row_h = 14
+    max_rows = (t_bottom - row_y - 2) // row_h
+    display_rows = containers[:max_rows]
+
+    if not display_rows:
+        _draw_center(draw, 3, 396, t_top + 40, "NO ACTIVE CONTAINERS", FONT_TINY, SOFT_INK)
+    else:
+        for i, item in enumerate(display_rows):
+            if i > 0:
+                draw.line((6, row_y - 2, 393, row_y - 2), fill=(225, 220, 205))
+
+            c_name = _clip_to_width(str(item.get("name") or "--").upper(), FONT_TINY, col_x["cpu"] - col_x["name"] - 8)
+            c_cpu = _fmt_pct(item.get("cpu_percent"))
+            c_mem = _fmt_mb(item.get("memory_mb"))
+            c_port = _clip_to_width(_port_label(item.get("ports")), FONT_TINY, col_x["status"] - col_x["port"] - 6)
+            c_status = _clip_to_width(_status_label(item.get("status")), FONT_TINY, 392 - col_x["status"])
+
+            FONT_TINY.draw(draw, (col_x["name"], row_y), c_name, INK)
+            FONT_TINY.draw(draw, (col_x["cpu"], row_y), c_cpu, INK)
+            FONT_TINY.draw(draw, (col_x["mem"], row_y), c_mem, INK)
+            FONT_TINY.draw(draw, (col_x["port"], row_y), c_port, SOFT_INK)
+            FONT_TINY.draw(draw, (col_x["status"], row_y), c_status, INK)
+
+            row_y += row_h
+
+        rem = len(containers) - len(display_rows)
+        if rem > 0 and row_y < t_bottom - 10:
+            FONT_TINY.draw(draw, (col_x["name"], row_y), f"... AND {rem} MORE CONTAINERS", SOFT_INK)
+
     if (snapshot.get("display") or {}).get("invert"):
         _invert_black_white(img)
     return _encode_frame(img)
@@ -164,96 +302,30 @@ def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
 def render_error(message: str) -> RenderedFrame:
     img = Image.new("RGB", (EPD_WIDTH, EPD_HEIGHT), PAPER)
     draw = ImageDraw.Draw(img)
-    fonts = Fonts()
     draw.rectangle((0, 0, EPD_WIDTH - 1, EPD_HEIGHT - 1), outline=INK)
-    _draw_text(draw, (18, 18), "EPAPER DATA ERROR", fonts.large, INK)
-    draw.line((18, 50, 382, 50), fill=INK)
-    _wrapped_text(draw, (18, 70), message, 48, fonts.small, INK, 16)
+    FONT_MEDIUM.draw(draw, (18, 18), "EPAPER DATA ERROR", INK)
+    draw.line((18, 46, 382, 46), fill=INK)
+    _wrapped_text(draw, (18, 60), message, 48, FONT_TINY, INK, 14)
     return _encode_frame(img)
 
 
-def _draw_header(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], snapshot: dict[str, Any]) -> None:
-    system = nas.get("system") or {}
-    latest = nas.get("latest") or {}
-    alert = _system_alert(system, latest)
-    _draw_status_mark(draw, 2, 2, 58, alert)
-
-    chips = [
-        ("NAME", _clip(str(system.get("name") or "EPAPER").upper(), 8)),
-        ("TEMP", _temperature_label(latest.get("temperatures"))),
-        ("LOAD", _load_label(latest.get("load_average"))),
-    ]
-    x = 64
-    for label, value in chips:
-        width = _chip_width(fonts, label, value)
-        _info_chip(draw, fonts, x, 2, width, 24, label, value)
-        x += width + 8
-
-    now = datetime.now(_timezone(snapshot))
-    _right_text(draw, 397, 0, now.strftime("%m/%d"), fonts.small, SOFT_INK)
-    _right_text(draw, 397, 18, now.strftime("%H:%M"), fonts.clock, INK)
-    draw.line((64, 42, 397, 42), fill=INK)
-    chart_label = _chart_window_label(snapshot.get("history_minutes"))
-    _draw_text(
-        draw,
-        (64, 49),
-        f"MEM {_fmt_gb_pair(latest.get('memory_used_gb'), latest.get('memory_gb'))}  DISK {_fmt_disk_gb_pair(latest.get('disk_used_gb'), latest.get('disk_gb'))}  {chart_label}",
-        fonts.tiny,
-        INK,
-    )
+def _draw_status_block(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, alert: str) -> None:
+    draw.rectangle((x, y, x + size, y + size), fill=INK)
+    circle = (x + 8, y + 8, x + size - 8, y + size - 8)
+    if alert == "risk":
+        draw.ellipse(circle, fill=PAPER)
+        draw.ellipse((circle[0] + 5, circle[1] + 5, circle[2] - 5, circle[3] - 5), fill=RED)
+    elif alert == "danger":
+        draw.ellipse(circle, fill=RED)
+        draw.ellipse((circle[0] + 6, circle[1] + 6, circle[2] - 6, circle[3] - 6), fill=PAPER)
+    else:
+        draw.ellipse(circle, fill=PAPER)
 
 
-def _draw_metric_panels(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any], router: dict[str, Any]) -> None:
-    panels = [
-        (2, 70, 126, 54, f"{_short_system_name(nas)} CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
-        (140, 70, 126, 54, f"{_short_system_name(nas)} MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
-        (278, 70, 120, 54, _short_system_name(router), router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
-    ]
-    for x, y, w, h, title, values, value in panels:
-        _panel(draw, fonts, x, y, w, h, title, value, values)
-
-
-def _draw_container_table(draw: ImageDraw.ImageDraw, fonts: Fonts, nas: dict[str, Any]) -> None:
-    containers = list(nas.get("container_latest") or [])
-    containers.sort(key=lambda item: (float(item.get("cpu_percent") or 0), float(item.get("memory_mb") or 0)), reverse=True)
-    total_cpu = sum(float(item.get("cpu_percent") or 0) for item in containers)
-    total_mem = sum(float(item.get("memory_mb") or 0) for item in containers)
-
-    _draw_text(draw, (2, 136), "CONTAINERS", fonts.medium, INK)
-    summary = [("RUN", str(len(containers))), ("CPU", f"{total_cpu:.1f}%"), ("MEM", _fmt_mb(total_mem))]
-    widths = [_chip_width(fonts, label, value) for label, value in summary]
-    x = 397 - sum(widths) - 12 * (len(widths) - 1)
-    for (label, value), width in zip(summary, widths):
-        _info_chip(draw, fonts, x, 131, width, 24, label, value)
-        x += width + 12
-
-    left, top, right, bottom = 2, 166, 397, 297
-    header_y = top + 22
-    draw.rectangle((left, top, right, bottom), outline=INK)
-    draw.line((left, header_y, right, header_y), fill=INK)
-    draw.line((left, bottom - 1, right, bottom - 1), fill=INK)
-    cols = {"name": 8, "cpu": 184, "mem": 234, "port": 292, "status": 344}
-    for key, label in [("name", "NAME"), ("cpu", "CPU"), ("mem", "MEM"), ("port", "PORT"), ("status", "STATUS")]:
-        _draw_text(draw, (cols[key], top + 4), label, fonts.small, INK)
-
-    row_y = header_y + 5
-    row_step = 17
-    max_rows = max(0, (bottom - row_y - 4) // row_step)
-    for item in containers[:max_rows]:
-        _draw_text(draw, (cols["name"], row_y), _clip_to_width(str(item.get("name") or "--"), fonts.small, cols["cpu"] - cols["name"] - 6), fonts.small, INK)
-        _draw_text(draw, (cols["cpu"], row_y), _fmt_pct(item.get("cpu_percent")), fonts.small, INK)
-        _draw_text(draw, (cols["mem"], row_y), _fmt_mb(item.get("memory_mb")), fonts.small, INK)
-        _draw_text(draw, (cols["port"], row_y), _clip_to_width(_port_label(item.get("ports")), fonts.small, cols["status"] - cols["port"] - 6), fonts.small, INK)
-        _draw_text(draw, (cols["status"], row_y), _clip_to_width(_status_label(item.get("status")), fonts.small, right - cols["status"] - 6), fonts.small, INK)
-        row_y += row_step
-
-
-def _panel(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, title: str, value: str, values: list[Any]) -> None:
-    draw.rectangle((x, y, x + w, y + h), outline=INK)
-    draw.line((x, y + 20, x + w, y + 20), fill=INK)
-    _draw_text(draw, (x + 6, y + 4), title, fonts.tiny, INK)
-    _right_text(draw, x + w - 6, y + 4, value, fonts.tiny, INK)
-    _sparkline(draw, x + 8, y + 32, w - 16, h - 39, values)
+def _draw_center(draw: ImageDraw.ImageDraw, left: int, right: int, y: int, text: str, font: BitmapFont, fill: tuple) -> None:
+    w = font.measure(text)[0]
+    x = left + (right - left - w) // 2
+    font.draw(draw, (x, y), text, fill)
 
 
 def _sparkline(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, h: int, values: list[Any]) -> None:
@@ -271,29 +343,6 @@ def _sparkline(draw: ImageDraw.ImageDraw, x: int, y: int, w: int, h: int, values
     draw.line(points, fill=INK, width=1)
 
 
-def _draw_status_mark(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, alert: str) -> None:
-    draw.rectangle((x, y, x + size, y + size), fill=INK)
-    circle = (x + 12, y + 12, x + size - 12, y + size - 12)
-    if alert == "risk":
-        cell = 5
-        draw.ellipse(circle, fill=PAPER)
-        cx = (circle[0] + circle[2]) / 2
-        cy = (circle[1] + circle[3]) / 2
-        radius = (circle[2] - circle[0]) / 2
-        for yy in range(y + 12, y + size - 12, cell):
-            for xx in range(x + 12, x + size - 12, cell):
-                corners = [(xx, yy), (xx + cell - 1, yy), (xx, yy + cell - 1), (xx + cell - 1, yy + cell - 1)]
-                inside = all((px - cx) ** 2 + (py - cy) ** 2 <= (radius - 1) ** 2 for px, py in corners)
-                if inside and ((xx - x) // cell + (yy - y) // cell) % 2 == 0:
-                    draw.rectangle((xx, yy, xx + cell - 1, yy + cell - 1), fill=RED)
-        draw.ellipse(circle, outline=PAPER, width=2)
-    elif alert == "danger":
-        draw.ellipse(circle, fill=RED)
-        draw.ellipse((circle[0] + 8, circle[1] + 8, circle[2] - 8, circle[3] - 8), fill=PAPER)
-    else:
-        draw.ellipse(circle, fill=PAPER)
-
-
 def _encode_frame(img: Image.Image) -> RenderedFrame:
     black = bytearray(PLANE_BYTES)
     red = bytearray(PLANE_BYTES)
@@ -309,43 +358,6 @@ def _encode_frame(img: Image.Image) -> RenderedFrame:
             elif (r + g + b) < 690:
                 black[byte_idx] |= bit
     return RenderedFrame(img, bytes(black), bytes(red))
-
-
-def _load_font(role: str, font_name: str = "pixel", size_delta: int = 0) -> BitmapFont:
-    base = {
-        "tiny": 1,
-        "small": 2,
-        "medium": 2,
-        "large": 3,
-        "clock": 4,
-    }.get(role, 2)
-    scale = max(1, min(5, base + size_delta))
-    if font_name == "narrow":
-        return BitmapFont(scale=scale, x_scale=max(1, scale - 1), spacing=1, weight=1)
-    if font_name == "wide":
-        return BitmapFont(scale=scale, x_scale=scale + 1, spacing=2, weight=1)
-    if font_name == "bold":
-        return BitmapFont(scale=scale, x_scale=scale, spacing=2, weight=2)
-    return BitmapFont(scale=scale, x_scale=scale, spacing=2, weight=1)
-
-
-def _info_chip(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, h: int, label: str, value: str) -> None:
-    draw.rectangle((x, y, x + w, y + h), outline=INK)
-    text_y = y + (h - _font_height(fonts.tiny)) // 2
-    _draw_text(draw, (x + 5, text_y), label, fonts.tiny, SOFT_INK)
-    _right_text(draw, x + w - 5, text_y, value, fonts.tiny, INK)
-
-
-def _small_box(draw: ImageDraw.ImageDraw, fonts: Fonts, x: int, y: int, w: int, text: str) -> None:
-    h = 24
-    draw.rectangle((x, y, x + w, y + h), outline=INK)
-    _draw_text(draw, (x + 5, y + (h - _font_height(fonts.tiny)) // 2), text, fonts.tiny, INK)
-
-
-def _chip_width(fonts: Fonts, label: str, value: str) -> int:
-    label_width, _ = _text_size(fonts.tiny, label)
-    value_width, _ = _text_size(fonts.tiny, value)
-    return max(44, label_width + value_width + 22)
 
 
 def _find_system(systems: list[dict[str, Any]], name_part: str) -> dict[str, Any] | None:
@@ -372,11 +384,6 @@ def _other_system(systems: list[dict[str, Any]], current: dict[str, Any]) -> dic
         if (item.get("system") or {}).get("id") != current_id:
             return item
     return None
-
-
-def _short_system_name(system: dict[str, Any]) -> str:
-    name = str((system.get("system") or {}).get("name") or "SYS").upper()
-    return _clip(name.replace("ISTOREOS-", "R"), 8)
 
 
 def _invert_black_white(img: Image.Image) -> None:
@@ -425,23 +432,6 @@ def _fmt_mb(value: Any) -> str:
     return f"{number / 1024:.1f}G" if number >= 1024 else f"{number:.0f}M"
 
 
-def _draw_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, font: BitmapFont, fill: tuple[int, int, int]) -> None:
-    font.draw(draw, pos, str(text), fill)
-
-
-def _right_text(draw: ImageDraw.ImageDraw, right: int, y: int, text: str, font: BitmapFont, fill: tuple[int, int, int]) -> None:
-    width, _ = _text_size(font, str(text))
-    _draw_text(draw, (right - width, y), text, font, fill)
-
-
-def _text_size(font: BitmapFont, text: str) -> tuple[int, int]:
-    return font.measure(str(text))
-
-
-def _font_height(font: BitmapFont) -> int:
-    return _text_size(font, "Ag")[1]
-
-
 def _fmt_gb_pair(used: Any, total: Any) -> str:
     if used is None or total is None:
         return "--/--"
@@ -454,16 +444,6 @@ def _fmt_disk_gb_pair(used: Any, total: Any) -> str:
     if used is None or total is None:
         return "--/--Gb"
     return f"{float(used):.0f}/{float(total):.0f}Gb"
-
-
-def _chart_window_label(minutes: Any) -> str:
-    try:
-        value = int(minutes)
-    except (TypeError, ValueError):
-        value = 1440
-    if value >= 60 and value % 60 == 0:
-        return f"{value // 60}H↓"
-    return f"{value}Min↓"
 
 
 def _port_label(value: Any) -> str:
@@ -500,10 +480,10 @@ def _clip(value: str, limit: int) -> str:
 
 def _clip_to_width(value: str, font: BitmapFont, width: int) -> str:
     text = str(value)
-    if _text_size(font, text)[0] <= width:
+    if font.measure(text)[0] <= width:
         return text
     suffix = "."
-    while text and _text_size(font, text + suffix)[0] > width:
+    while text and font.measure(text + suffix)[0] > width:
         text = text[:-1]
     return (text + suffix) if text else suffix
 
@@ -514,13 +494,13 @@ def _wrapped_text(draw: ImageDraw.ImageDraw, pos: tuple[int, int], text: str, wi
     for word in text.split():
         trial = f"{line} {word}".strip()
         if len(trial) > width:
-            _draw_text(draw, (x, y), line, font, fill)
+            font.draw(draw, (x, y), line, fill)
             y += line_height
             line = word
         else:
             line = trial
     if line:
-        _draw_text(draw, (x, y), line, font, fill)
+        font.draw(draw, (x, y), line, fill)
 
 
 def _bitmap_text(text: Any) -> str:
@@ -543,5 +523,3 @@ def _timezone(snapshot: dict[str, Any]) -> ZoneInfo:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError:
         return ZoneInfo("Asia/Shanghai")
-
-

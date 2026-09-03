@@ -16,7 +16,7 @@ from display_renderer import EPD_HEIGHT, EPD_WIDTH, render_error, render_snapsho
 from runtime_config import bump_force_refresh, load_runtime_config, update_runtime_config
 
 
-app = FastAPI(title="EPaper NAS Display Service", version=os.getenv("APP_VERSION", "0.1.5"))
+app = FastAPI(title="EPaper NAS Display Service", version=os.getenv("APP_VERSION", "0.1.7"))
 
 _beszel_client: BeszelClient | None = None
 _device_logs = collections.deque(maxlen=30)
@@ -152,12 +152,11 @@ def health() -> dict[str, object]:
     runtime = load_runtime_config()
     return {
         "ok": True,
-        "version": os.getenv("APP_VERSION", "0.1.5"),
+        "version": os.getenv("APP_VERSION", "0.1.7"),
         "beszel_base_url": settings.beszel_base_url,
         "display_interval_seconds": runtime.display_interval_seconds,
         "display_chart_minutes": runtime.chart_minutes,
         "font_name": runtime.font_name,
-        "font_size": runtime.font_size,
         "timezone": runtime.timezone,
         "force_refresh_seq": runtime.force_refresh_seq,
     }
@@ -250,101 +249,256 @@ def preview() -> str:
 <html lang="zh-CN">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EPaper Preview & Management</title>
+<title>ESP32 墨水屏看板管理中心</title>
 <style>
-:root{{--bg:#eadeca;--card-bg:#f5f0e3;--border:#cfc4ad;--text:#2a2723;--primary:#5c4f3d;--btn-bg:#e5dcc7;--btn-hover:#d5cbb4;--accent:#af231c}}
-*{{box-sizing:border-box}}
-body{{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,ui-monospace,monospace;padding:24px 16px;line-height:1.4}}
-main{{display:flex;flex-direction:column;align-items:center;min-height:100vh}}
-.container{{width:100%;max-width:540px}}
-h1{{font-size:18px;margin:0 0 16px;text-align:center;color:var(--text);letter-spacing:0.5px}}
-.card{{background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:14px;box-shadow:0 3px 10px rgba(0,0,0,0.03)}}
-.card-header{{font-size:13px;font-weight:bold;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:6px}}
-.grid-fields{{display:grid;grid-template-columns:repeat(auto-fit, minmax(110px, 1fr));gap:12px;margin-bottom:12px}}
-.field{{display:flex;flex-direction:column;gap:5px}}
-.field label{{font-size:11px;font-weight:600;color:#595448}}
-input,select,button{{font:inherit;border:1px solid var(--border);border-radius:4px;background:#fff;padding:6px 9px;font-size:12px;color:var(--text);outline:none}}
-input:focus,select:focus{{border-color:#7f735d}}
-button{{background:var(--btn-bg);cursor:pointer;font-weight:600;transition:all .15s ease}}
-button:hover{{background:var(--btn-hover)}}
-.actions{{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}}
-.broadcast-box{{display:flex;flex-wrap:wrap;gap:8px;align-items:center}}
-.systems-list{{display:grid;gap:8px;max-height:160px;overflow-y:auto;padding-right:4px}}
-.system-row{{display:flex;align-items:center;justify-content:space-between;background:#ece4d2;padding:6px 10px;border-radius:4px;border:1px solid #dfd5c0;font-size:12px}}
-.sys-left{{display:flex;align-items:center;gap:8px;overflow:hidden}}
-.sys-left span{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-.status-badge{{font-size:10px;padding:2px 5px;border-radius:3px;background:#ddd;font-weight:bold}}
-.status-up{{background:#d4edda;color:#155724}}
-.status-down{{background:#f8d7da;color:#721c24}}
-.sys-right{{display:flex;align-items:center;gap:6px;font-size:11px;color:#555}}
-.screen-shell{{background:#1e1d1b;padding:12px;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.2);display:flex;justify-content:center;margin:10px 0}}
-canvas{{display:block;width:{EPD_WIDTH}px;height:{EPD_HEIGHT}px;background:#f6f2de;image-rendering:pixelated}}
-.bar-footer{{display:flex;align-items:center;justify-content:space-between;font-size:11px;margin-top:6px;color:#666}}
-.bar-footer a{{color:var(--text);margin-left:8px;text-decoration:none;border-bottom:1px dotted #888}}
-.log-box{{background:#1e1d1b;color:#a8e6cf;padding:8px 10px;border-radius:4px;font-family:ui-monospace,monospace;font-size:11px;max-height:130px;overflow-y:auto}}
-.log-row{{line-height:1.5;border-bottom:1px solid #2f2d29;padding:2px 0}}
-.log-row:last-child{{border-bottom:none}}
-.text-error{{color:#ff8b8b}}
-.text-success{{color:#88e39f}}
-.msg-tip{{font-size:11px;color:#706856;margin-top:4px;word-break:break-all}}
+:root {{
+  --bg: #ece5d6;
+  --card-bg: #f7f3e8;
+  --border: #cec3ab;
+  --text: #2c2822;
+  --btn-bg: #e2d7be;
+  --btn-hover: #d2c5a7;
+  --accent: #af231c;
+}}
+* {{ box-sizing: border-box; }}
+body {{
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  padding: 20px 24px;
+  line-height: 1.4;
+}}
+header {{
+  max-width: 1060px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}}
+h1 {{ font-size: 19px; margin: 0; font-weight: 700; letter-spacing: 0.5px; }}
+.layout-wrapper {{
+  max-width: 1060px;
+  margin: 0 auto;
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}}
+/* 左栏：控制与状态面板 */
+.left-col {{
+  flex: 1;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}}
+/* 右栏：400x300 粘性固定渲染看板 */
+.right-col {{
+  width: 440px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 20px;
+}}
+.card {{
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 13px 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+}}
+.card-header {{
+  font-size: 13px;
+  font-weight: bold;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}}
+.grid-fields {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}}
+.field {{ display: flex; flex-direction: column; gap: 4px; }}
+.field label {{ font-size: 11px; font-weight: 600; color: #5c5647; }}
+input, select, button {{
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+}}
+input:focus, select:focus {{ border-color: #7b6f58; }}
+button {{
+  background: var(--btn-bg);
+  cursor: pointer;
+  font-weight: 600;
+  transition: all .15s ease;
+}}
+button:hover {{ background: var(--btn-hover); }}
+.actions {{ display: flex; gap: 8px; justify-content: flex-end; }}
+.broadcast-box {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }}
+.systems-list {{ display: grid; gap: 7px; max-height: 160px; overflow-y: auto; }}
+.system-row {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #ece4d2;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid #ddd1bb;
+  font-size: 12px;
+}}
+.sys-left {{ display: flex; align-items: center; gap: 8px; overflow: hidden; }}
+.sys-left span {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.status-badge {{ font-size: 10px; padding: 2px 5px; border-radius: 3px; font-weight: bold; }}
+.status-up {{ background: #d4edda; color: #155724; }}
+.status-down {{ background: #f8d7da; color: #721c24; }}
+.sys-right {{ display: flex; align-items: center; gap: 6px; font-size: 11px; color: #555; }}
+.screen-shell {{
+  background: #1e1d1b;
+  padding: 12px;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  display: flex;
+  justify-content: center;
+  margin: 10px 0;
+}}
+canvas {{
+  display: block;
+  width: {EPD_WIDTH}px;
+  height: {EPD_HEIGHT}px;
+  background: #f6f2de;
+  image-rendering: pixelated;
+}}
+.bar-footer {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-top: 6px;
+  color: #666;
+}}
+.bar-footer a {{
+  color: var(--text);
+  margin-left: 8px;
+  text-decoration: none;
+  border-bottom: 1px dotted #888;
+}}
+.log-box {{
+  background: #1e1d1b;
+  color: #a8e6cf;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  max-height: 125px;
+  overflow-y: auto;
+}}
+.log-row {{ line-height: 1.45; border-bottom: 1px solid #2f2d29; padding: 2px 0; }}
+.log-row:last-child {{ border-bottom: none; }}
+.text-error {{ color: #ff8b8b; }}
+.text-success {{ color: #88e39f; }}
+.msg-tip {{ font-size: 11px; color: #706856; margin-top: 4px; word-break: break-all; }}
+
+@media (max-width: 900px) {{
+  .layout-wrapper {{ flex-direction: column-reverse; align-items: center; }}
+  .right-col {{ width: 100%; max-width: 440px; position: static; }}
+  .left-col {{ width: 100%; max-width: 440px; }}
+}}
 </style>
-<main><div class="container">
+
+<header>
   <h1>ESP32 墨水屏看板管理中心</h1>
+  <span style="font-size:12px;color:#7a6f59">v0.1.7 (400×300 专属排版)</span>
+</header>
 
-  <!-- 1. 显示与刷新配置 -->
-  <section class="card">
-    <div class="card-header"><span>⚙️ 屏幕与排版设置</span><span id="saveTip" style="font-size:11px;color:#6b5f48"></span></div>
-    <div class="grid-fields">
-      <div class="field"><label>刷新间隔(秒)</label><input id="interval" type="number" min="30" max="3600" step="30"></div>
-      <div class="field"><label>折线时间(分)</label><input id="chart" type="number" min="60" max="1440" step="60"></div>
-      <div class="field"><label>字体类型</label><select id="font"><option value="pixel">pixel</option><option value="narrow">narrow</option><option value="wide">wide</option><option value="bold">bold</option></select></div>
-      <div class="field"><label>字号增益 (默认0)</label><input id="fontSize" type="number" min="0" max="2" step="1" value="0"></div>
-      <div class="field"><label>时区</label><input id="timezone" list="timezones"><datalist id="timezones"><option value="Asia/Shanghai"><option value="UTC"><option value="Asia/Tokyo"><option value="America/Los_Angeles"><option value="America/New_York"></datalist></div>
-    </div>
-    <div class="actions">
-      <button id="save" style="padding:6px 14px">💾 保存配置</button>
-      <button id="force" style="padding:6px 14px">🔄 立即强刷</button>
-    </div>
-  </section>
+<div class="layout-wrapper">
+  <!-- 左栏：控制配置与诊断 -->
+  <div class="left-col">
+    <!-- 1. 屏幕设置 (移除字号，固化黄金比例) -->
+    <section class="card">
+      <div class="card-header">
+        <span>⚙️ 屏幕刷新与排版设置</span>
+        <span id="saveTip" style="font-size:11px;color:#6b5f48"></span>
+      </div>
+      <div class="grid-fields">
+        <div class="field"><label>刷新间隔(秒)</label><input id="interval" type="number" min="30" max="3600" step="30"></div>
+        <div class="field"><label>折线时间(分)</label><input id="chart" type="number" min="60" max="1440" step="60"></div>
+        <div class="field"><label>字体类型</label><select id="font"><option value="pixel">pixel (默认点阵)</option><option value="narrow">narrow</option><option value="wide">wide</option><option value="bold">bold</option></select></div>
+        <div class="field"><label>时区</label><input id="timezone" list="timezones"><datalist id="timezones"><option value="Asia/Shanghai"><option value="UTC"><option value="Asia/Tokyo"><option value="America/Los_Angeles"><option value="America/New_York"></datalist></div>
+      </div>
+      <div class="actions">
+        <button id="save" style="padding:6px 14px">💾 保存配置</button>
+        <button id="force" style="padding:6px 14px">🔄 立即强刷</button>
+      </div>
+    </section>
 
-  <!-- 2. 服务器广播宣告配对 -->
-  <section class="card">
-    <div class="card-header"><span>📢 局域网 UDP 广播宣告 (ESP32 免配对)</span></div>
-    <div class="broadcast-box">
-      <input id="broadcastHost" placeholder="服务对外IP" style="flex:2;min-width:130px" title="ESP32 访问的主机 IP 或域名">
-      <input id="broadcastPort" type="number" value="17001" style="width:70px" title="ESP32 HTTP 访问端口">
-      <button id="broadcastBtn" style="flex:1;min-width:120px;background:#ecd9b3">📢 广播服务器</button>
-    </div>
-    <div id="broadcastStatus" class="msg-tip">点击后将向局域网广播服务地址，同一 WiFi 下的墨水屏将自动捕获并配对。</div>
-  </section>
+    <!-- 2. 局域网 UDP 广播宣告 -->
+    <section class="card">
+      <div class="card-header"><span>📢 局域网 UDP 广播宣告 (ESP32 免配对)</span></div>
+      <div class="broadcast-box">
+        <input id="broadcastHost" placeholder="服务对外IP" style="flex:2;min-width:130px" title="ESP32 访问的主机 IP 或域名">
+        <input id="broadcastPort" type="number" value="17001" style="width:70px" title="ESP32 HTTP 访问端口">
+        <button id="broadcastBtn" style="flex:1;min-width:115px;background:#eddab4">📢 广播服务器</button>
+      </div>
+      <div id="broadcastStatus" class="msg-tip">点击后将向局域网广播服务地址，ESP32 墨水屏将自动捕获并永久存入 NVS。</div>
+    </section>
 
-  <!-- 3. 设备多选勾选 -->
-  <section class="card">
-    <div class="card-header"><span>💻 轮巡设备选择 (勾选要显示的设备)</span><span style="font-size:11px;font-weight:normal;color:#666">勾选即参与屏幕轮播</span></div>
-    <div class="systems-list" id="systems">正在获取 Beszel 系统设备...</div>
-  </section>
+    <!-- 3. 轮巡设备选择 -->
+    <section class="card">
+      <div class="card-header">
+        <span>💻 轮巡监控设备 (勾选要显示的设备)</span>
+        <span style="font-size:11px;font-weight:normal;color:#666">勾选即参与屏幕轮播</span>
+      </div>
+      <div class="systems-list" id="systems">正在获取 Beszel 系统设备...</div>
+    </section>
 
-  <!-- 4. ESP32 客户端请求日志诊断 -->
-  <section class="card">
-    <div class="card-header"><span>📡 ESP32 设备连接诊断与请求日志</span><button id="refreshLogs" style="font-size:11px;padding:2px 8px">刷新状态</button></div>
-    <div id="deviceSummary" style="font-size:12px;margin-bottom:8px;font-weight:600">正在检查设备在线记录...</div>
-    <div class="log-box" id="deviceLogsList">暂无日志</div>
-  </section>
+    <!-- 4. ESP32 连接诊断与请求日志 -->
+    <section class="card">
+      <div class="card-header">
+        <span>📡 ESP32 设备连接诊断与请求日志</span>
+        <button id="refreshLogs" style="font-size:11px;padding:2px 8px">刷新状态</button>
+      </div>
+      <div id="deviceSummary" style="font-size:12px;margin-bottom:8px;font-weight:600">正在检查设备在线记录...</div>
+      <div class="log-box" id="deviceLogsList">暂无日志</div>
+    </section>
+  </div>
 
-  <!-- 5. 实时墨水屏预览 -->
-  <section class="card">
-    <div class="card-header"><span>🖥️ 400×300 实时渲染预览</span><button id="refreshFrame" style="font-size:11px;padding:2px 8px">刷新预览</button></div>
-    <div class="screen-shell"><canvas id="screen" width="{EPD_WIDTH}" height="{EPD_HEIGHT}"></canvas></div>
-    <div class="bar-footer"><span id="status">准备就绪</span><div><a href="/frame.bin" target="_blank">frame.bin</a><a href="/screen.png" target="_blank">screen.png</a><a href="/api/display/data" target="_blank">data</a></div></div>
-  </section>
-</div></main>
+  <!-- 右栏：400x300 实时渲染预览 (粘性吸顶) -->
+  <div class="right-col">
+    <section class="card" style="padding: 14px 18px;">
+      <div class="card-header">
+        <span>🖥️ 400×300 实时渲染预览</span>
+        <button id="refreshFrame" style="font-size:11px;padding:2px 8px">刷新预览</button>
+      </div>
+      <div class="screen-shell">
+        <canvas id="screen" width="{EPD_WIDTH}" height="{EPD_HEIGHT}"></canvas>
+      </div>
+      <div class="bar-footer">
+        <span id="status">准备就绪</span>
+        <div>
+          <a href="/frame.bin" target="_blank">frame.bin</a>
+          <a href="/screen.png" target="_blank">screen.png</a>
+          <a href="/api/display/data" target="_blank">data</a>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
 
 <script>
-const W={EPD_WIDTH}, H={EPD_HEIGHT}, HEADER=15;
-const canvas=document.getElementById('screen'), ctx=canvas.getContext('2d'), statusEl=document.getElementById('status');
-const intervalInput=document.getElementById('interval'), chartInput=document.getElementById('chart'), fontInput=document.getElementById('font'), fontSizeInput=document.getElementById('fontSize'), timezoneInput=document.getElementById('timezone'), systemsEl=document.getElementById('systems');
-const broadcastHostInput=document.getElementById('broadcastHost'), broadcastPortInput=document.getElementById('broadcastPort'), broadcastBtn=document.getElementById('broadcastBtn'), broadcastStatus=document.getElementById('broadcastStatus');
-const deviceSummary=document.getElementById('deviceSummary'), deviceLogsList=document.getElementById('deviceLogsList');
+const W = {EPD_WIDTH}, H = {EPD_HEIGHT}, HEADER = 15;
+const canvas = document.getElementById('screen'), ctx = canvas.getContext('2d'), statusEl = document.getElementById('status');
+const intervalInput = document.getElementById('interval'), chartInput = document.getElementById('chart'), fontInput = document.getElementById('font'), timezoneInput = document.getElementById('timezone'), systemsEl = document.getElementById('systems');
+const broadcastHostInput = document.getElementById('broadcastHost'), broadcastPortInput = document.getElementById('broadcastPort'), broadcastBtn = document.getElementById('broadcastBtn'), broadcastStatus = document.getElementById('broadcastStatus');
+const deviceSummary = document.getElementById('deviceSummary'), deviceLogsList = document.getElementById('deviceLogsList');
 
 if (!broadcastHostInput.value && window.location.hostname && window.location.hostname !== '127.0.0.1' && window.location.hostname !== 'localhost') {{
   broadcastHostInput.value = window.location.hostname;
@@ -353,58 +507,59 @@ if (window.location.port) {{
   broadcastPortInput.value = window.location.port;
 }}
 
-const paper=[246,242,222,255], ink=[36,34,28,255], red=[176,28,22,255];
-let settings={{display_interval_seconds:60,chart_minutes:1440,system_modes:{{}},font_name:'pixel',font_size:0,timezone:'Asia/Shanghai',force_refresh_seq:0}}, timer=null;
+const paper = [246, 242, 222, 255], ink = [36, 34, 28, 255], red = [176, 28, 22, 255];
+let settings = {{ display_interval_seconds: 60, chart_minutes: 1440, system_modes: {{}}, font_name: 'pixel', timezone: 'Asia/Shanghai', force_refresh_seq: 0 }}, timer = null;
 
-function bit(bytes,index){{return (bytes[index>>3]&(0x80>>(index&7)))!==0}}
+function bit(bytes, index) {{
+  return (bytes[index >> 3] & (0x80 >> (index & 7))) !== 0;
+}}
 
-async function drawFrame(){{
-  statusEl.textContent='正在加载 frame.bin...';
+async function drawFrame() {{
+  statusEl.textContent = '正在加载 frame.bin...';
   try {{
-    const res=await fetch(`/frame.bin?minutes=${{settings.chart_minutes}}&t=${{Date.now()}}`,{{cache:'no-store'}});
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const buf=await res.arrayBuffer(), view=new DataView(buf);
-    const magic=String.fromCharCode(...new Uint8Array(buf,0,4));
-    const width=view.getUint16(5,true), height=view.getUint16(7,true), planes=view.getUint8(9), planeBytes=view.getUint32(11,true);
-    if(magic!=='EPD1'||width!==W||height!==H||planes!==2) throw new Error('无效的帧头部格式');
-    const black=new Uint8Array(buf,HEADER,planeBytes), redPlane=new Uint8Array(buf,HEADER+planeBytes,planeBytes);
-    const img=ctx.createImageData(W,H);
-    for(let i=0;i<W*H;i++){{
-      const isRed=bit(redPlane,i), isBlack=bit(black,i);
-      const color=isRed?red:(isBlack?ink:paper), p=i*4;
-      img.data[p]=color[0]; img.data[p+1]=color[1]; img.data[p+2]=color[2]; img.data[p+3]=255;
+    const res = await fetch(`/frame.bin?minutes=${{settings.chart_minutes}}&t=${{Date.now()}}`, {{ cache: 'no-store' }});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const buf = await res.arrayBuffer(), view = new DataView(buf);
+    const magic = String.fromCharCode(...new Uint8Array(buf, 0, 4));
+    const width = view.getUint16(5, true), height = view.getUint16(7, true), planes = view.getUint8(9), planeBytes = view.getUint32(11, true);
+    if (magic !== 'EPD1' || width !== W || height !== H || planes !== 2) throw new Error('无效的帧头部格式');
+    const black = new Uint8Array(buf, HEADER, planeBytes), redPlane = new Uint8Array(buf, HEADER + planeBytes, planeBytes);
+    const img = ctx.createImageData(W, H);
+    for (let i = 0; i < W * H; i++) {{
+      const isRed = bit(redPlane, i), isBlack = bit(black, i);
+      const color = isRed ? red : (isBlack ? ink : paper), p = i * 4;
+      img.data[p] = color[0]; img.data[p + 1] = color[1]; img.data[p + 2] = color[2]; img.data[p + 3] = 255;
     }}
-    ctx.putImageData(img,0,0);
-    statusEl.textContent=`已渲染 ${{width}}×${{height}}，更新于 ${{new Date().toLocaleTimeString()}}`;
+    ctx.putImageData(img, 0, 0);
+    statusEl.textContent = `已渲染 ${{width}}×${{height}}，更新于 ${{new Date().toLocaleTimeString()}}`;
   }} catch (err) {{
-    statusEl.textContent=`渲染失败: ${{err.message}}`;
+    statusEl.textContent = `渲染失败: ${{err.message}}`;
   }}
 }}
 
-async function loadSettings(){{
-  const res=await fetch('/api/admin/settings',{{cache:'no-store'}});
-  settings=await res.json();
-  intervalInput.value=settings.display_interval_seconds;
-  chartInput.value=settings.chart_minutes;
-  fontInput.value=settings.font_name||'pixel';
-  // 字体默认值-1升级为0
-  fontSizeInput.value = (settings.font_size === undefined || settings.font_size < 0) ? 0 : settings.font_size;
-  timezoneInput.value=settings.timezone||'Asia/Shanghai';
+async function loadSettings() {{
+  const res = await fetch('/api/admin/settings', {{ cache: 'no-store' }});
+  settings = await res.json();
+  intervalInput.value = settings.display_interval_seconds;
+  chartInput.value = settings.chart_minutes;
+  fontInput.value = settings.font_name || 'pixel';
+  timezoneInput.value = settings.timezone || 'Asia/Shanghai';
   await loadSystems();
   await loadDeviceLogs();
   resetTimer();
 }}
 
-async function loadSystems(){{
-  const res=await fetch('/api/display/systems',{{cache:'no-store'}});
-  const data=await res.json();
-  systemsEl.innerHTML='';
-  if(!data.items || data.items.length === 0) {{
+async function loadSystems() {{
+  const res = await fetch('/api/display/systems', {{ cache: 'no-store' }});
+  const data = await res.json();
+  systemsEl.innerHTML = '';
+  if (!data.items || data.items.length === 0) {{
     systemsEl.innerHTML = '<div style="color:#777;font-size:12px">暂未检测到 Beszel 系统</div>';
     return;
   }}
-  for(const item of data.items){{
-    const row=document.createElement('div'); row.className='system-row';
+  for (const item of data.items) {{
+    const row = document.createElement('div');
+    row.className = 'system-row';
     const isUp = item.status === 'up';
     const currentMode = (settings.system_modes && settings.system_modes[item.id]) !== undefined ? settings.system_modes[item.id] : item.mode;
     const isEnabled = currentMode !== 'disabled';
@@ -429,9 +584,9 @@ async function loadSystems(){{
   }}
 }}
 
-function collectModes(){{
-  const modes={{}};
-  for(const row of systemsEl.querySelectorAll('.system-row')) {{
+function collectModes() {{
+  const modes = {{}};
+  for (const row of systemsEl.querySelectorAll('.system-row')) {{
     const enChk = row.querySelector('input[data-sys-enable]');
     const invChk = row.querySelector('input[data-sys-invert]');
     if (enChk && invChk) {{
@@ -448,58 +603,57 @@ function collectModes(){{
   return modes;
 }}
 
-async function saveSettings(){{
+async function saveSettings() {{
   const saveTip = document.getElementById('saveTip');
   saveTip.textContent = '保存中...';
   const payload = {{
     display_interval_seconds: Number(intervalInput.value),
     chart_minutes: Number(chartInput.value),
     font_name: fontInput.value,
-    font_size: Number(fontSizeInput.value) || 0,
     timezone: timezoneInput.value,
     system_modes: collectModes()
   }};
-  const res=await fetch('/api/admin/settings',{{
-    method:'POST',
-    headers:{{'content-type':'application/json'}},
+  const res = await fetch('/api/admin/settings', {{
+    method: 'POST',
+    headers: {{ 'content-type': 'application/json' }},
     body: JSON.stringify(payload)
   }});
-  settings=await res.json();
+  settings = await res.json();
   saveTip.textContent = '已保存！';
-  setTimeout(()=>saveTip.textContent='', 2500);
+  setTimeout(() => saveTip.textContent = '', 2500);
   await loadSystems();
   resetTimer();
   await drawFrame();
 }}
 
-async function forceRefresh(){{
-  const res=await fetch('/api/admin/force-refresh',{{method:'POST'}});
-  settings=await res.json();
+async function forceRefresh() {{
+  const res = await fetch('/api/admin/force-refresh', {{ method: 'POST' }});
+  settings = await res.json();
   await drawFrame();
 }}
 
-async function announceServer(){{
-  broadcastStatus.textContent='正在向局域网广播宣告服务器地址...';
-  try{{
-    const ip=broadcastHostInput.value.trim();
-    const port=Number(broadcastPortInput.value.trim()) || 17001;
-    const res=await fetch('/api/admin/broadcast',{{
-      method:'POST',
-      headers:{{'content-type':'application/json'}},
-      body:JSON.stringify({{ip,port}})
+async function announceServer() {{
+  broadcastStatus.textContent = '正在向局域网广播宣告服务器地址...';
+  try {{
+    const ip = broadcastHostInput.value.trim();
+    const port = Number(broadcastPortInput.value.trim()) || 17001;
+    const res = await fetch('/api/admin/broadcast', {{
+      method: 'POST',
+      headers: {{ 'content-type': 'application/json' }},
+      body: JSON.stringify({{ ip, port }})
     }});
-    const data=await res.json();
-    if(res.ok){{
-      broadcastStatus.innerHTML=`<span class="text-success">✔ 已向局域网广播地址宣告: <b>${{data.url}}</b> (目标: ${{data.detail?.target || '局域网'}})</span>`;
-    }}else{{
-      broadcastStatus.innerHTML=`<span class="text-error">✖ 广播失败: ${{data.detail || res.statusText}}</span>`;
+    const data = await res.json();
+    if (res.ok) {{
+      broadcastStatus.innerHTML = `<span class="text-success">✔ 已向局域网广播宣告: <b>${{data.url}}</b> (目标: ${{data.detail?.target || '局域网'}})</span>`;
+    }} else {{
+      broadcastStatus.innerHTML = `<span class="text-error">✖ 广播失败: ${{data.detail || res.statusText}}</span>`;
     }}
-  }}catch(err){{
-    broadcastStatus.innerHTML=`<span class="text-error">✖ 错误: ${{err.message}}</span>`;
+  }} catch (err) {{
+    broadcastStatus.innerHTML = `<span class="text-error">✖ 错误: ${{err.message}}</span>`;
   }}
 }}
 
-async function loadDeviceLogs(){{
+async function loadDeviceLogs() {{
   try {{
     const res = await fetch('/api/device/logs');
     const data = await res.json();
@@ -528,21 +682,21 @@ async function loadDeviceLogs(){{
   }}
 }}
 
-function resetTimer(){{
-  if(timer) clearInterval(timer);
-  timer=setInterval(()=>{{
-    drawFrame().catch(()=>{{}});
-    loadDeviceLogs().catch(()=>{{}});
-  }}, settings.display_interval_seconds*1000);
+function resetTimer() {{
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => {{
+    drawFrame().catch(() => {{}});
+    loadDeviceLogs().catch(() => {{}});
+  }}, settings.display_interval_seconds * 1000);
 }}
 
-document.getElementById('refreshFrame').onclick=()=>drawFrame();
-document.getElementById('save').onclick=()=>saveSettings();
-document.getElementById('force').onclick=()=>forceRefresh();
-document.getElementById('refreshLogs').onclick=()=>loadDeviceLogs();
-broadcastBtn.onclick=()=>announceServer();
+document.getElementById('refreshFrame').onclick = () => drawFrame();
+document.getElementById('save').onclick = () => saveSettings();
+document.getElementById('force').onclick = () => forceRefresh();
+document.getElementById('refreshLogs').onclick = () => loadDeviceLogs();
+broadcastBtn.onclick = () => announceServer();
 
-loadSettings().then(drawFrame).catch(e=>statusEl.textContent=e.message);
+loadSettings().then(drawFrame).catch(e => statusEl.textContent = e.message);
 </script></html>
 """
 
@@ -631,7 +785,7 @@ def _display_modes_for(systems: list[dict[str, object]], runtime) -> dict[str, s
 def _apply_display_rotation(snapshot: dict[str, object], runtime) -> None:
     systems = snapshot.get("systems")
     if not isinstance(systems, list) or not systems:
-        snapshot["display"] = {"active_system_id": "", "invert": False, "mode": "normal", "font_name": runtime.font_name, "font_size": runtime.font_size, "timezone": runtime.timezone}
+        snapshot["display"] = {"active_system_id": "", "invert": False, "mode": "normal", "font_name": runtime.font_name, "timezone": runtime.timezone}
         return
     source_systems = [(item.get("system") or {}) for item in systems if isinstance(item, dict)]
     modes = _display_modes_for(source_systems, runtime)
@@ -647,7 +801,7 @@ def _apply_display_rotation(snapshot: dict[str, object], runtime) -> None:
     active = active_pool[index] if isinstance(active_pool[index], dict) else {}
     active_id = str((active.get("system") or {}).get("id") or "")
     mode = modes.get(active_id, "normal")
-    snapshot["display"] = {"active_system_id": active_id, "invert": mode == "invert", "mode": mode, "font_name": runtime.font_name, "font_size": runtime.font_size, "timezone": runtime.timezone}
+    snapshot["display"] = {"active_system_id": active_id, "invert": mode == "invert", "mode": mode, "font_name": runtime.font_name, "timezone": runtime.timezone}
 
 
 def _beszel_chart_window(minutes: int) -> tuple[str, int]:
