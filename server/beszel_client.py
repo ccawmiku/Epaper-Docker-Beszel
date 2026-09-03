@@ -67,6 +67,14 @@ class BeszelClient:
                 params=params,
                 timeout=self.timeout,
             )
+            if response.status_code == 401:
+                # Token 可能已过期，重新鉴权并重试当前请求
+                self.authenticate()
+                response = self.session.get(
+                    self._url(f"/api/collections/{collection}/records"),
+                    params=params,
+                    timeout=self.timeout,
+                )
             self._raise_for_status(response, f"Beszel collection read failed: {collection}")
             payload = response.json()
             items.extend(payload.get("items") or [])

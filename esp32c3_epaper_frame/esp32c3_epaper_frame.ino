@@ -1,8 +1,10 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <HTTPClient.h>
 #include <ArduinoOTA.h>
+#include <Preferences.h>
 
 #define PIN_CS   7
 #define PIN_DC   3
@@ -18,9 +20,11 @@ static const char* WIFI_SSID = "YOUR_WIFI_SSID";
 static const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 static const char* OTA_HOSTNAME = "esp32c3-epaper";
 
-// Docker host should map both 15001 and 15002 to the Python service.
-static const char* FRAME_URL = "http://YOUR_NAS_IP:15002/frame.bin";
-static const char* CONFIG_URL = "http://YOUR_NAS_IP:15002/api/device/config";
+// UDP 广播监听端口（默认与服务端一致为 15002）
+#define UDP_BROADCAST_PORT 15002
+
+// 默认备用服务器地址（留空则完全依靠局域网 UDP 广播宣告自动绑定）
+static const char* DEFAULT_FALLBACK_URL = "";
 
 static const int EPD_W = 400;
 static const int EPD_H = 300;
@@ -38,7 +42,14 @@ static bool powered = false;
 static uint32_t displayIntervalMs = 60000;
 static uint32_t lastDisplayMs = 0;
 static uint32_t lastConfigPollMs = 0;
+static uint32_t lastWifiRetryMs = 0;
 static int forceRefreshSeq = -1;
+
+static WiFiUDP udp;
+static Preferences prefs;
+static String serverBaseUrl = "";
+static bool hasServerUrl = false;
+static bool udpListening = false;
 
 void digitalWriteFast(int pin, int value) {
   digitalWrite(pin, value);
@@ -163,6 +174,20 @@ void updateFull() {
   powered = false;
 }
 
+// 批量优化传输反相数据块
+static void transferInverted(const uint8_t* src, size_t length) {
+  uint8_t buffer[128];
+  size_t offset = 0;
+  while (offset < length) {
+    size_t chunk = min((size_t)128, length - offset);
+    for (size_t i = 0; i < chunk; i++) {
+      buffer[i] = ~src[offset + i];
+    }
+    SPI.writeBytes(buffer, chunk);
+    offset += chunk;
+  }
+}
+
 void uploadFrameFull() {
   setRamArea(0, 0, EPD_W, EPD_H);
 
@@ -170,7 +195,7 @@ void uploadFrameFull() {
   SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
   digitalWriteFast(PIN_DC, HIGH);
   digitalWriteFast(PIN_CS, LOW);
-  for (int i = 0; i < EPD_BYTES; i++) SPI.transfer(~blackPlane[i]);
+  transferInverted(blackPlane, EPD_BYTES);
   digitalWriteFast(PIN_CS, HIGH);
   SPI.endTransaction();
 
@@ -178,13 +203,11 @@ void uploadFrameFull() {
   SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
   digitalWriteFast(PIN_DC, HIGH);
   digitalWriteFast(PIN_CS, LOW);
-  for (int i = 0; i < EPD_BYTES; i++) {
 #if RED_PLANE_INVERTED
-    SPI.transfer(~redPlane[i]);
+  transferInverted(redPlane, EPD_BYTES);
 #else
-    SPI.transfer(redPlane[i]);
+  SPI.writeBytes(redPlane, EPD_BYTES);
 #endif
-  }
   digitalWriteFast(PIN_CS, HIGH);
   SPI.endTransaction();
 }
@@ -214,12 +237,47 @@ bool readExact(WiFiClient* stream, uint8_t* buffer, size_t length) {
   return true;
 }
 
-bool fetchFrame() {
-  if (WiFi.status() != WL_CONNECTED) return false;
+// NVS 持久化管理
+void loadSavedServerUrl() {
+  prefs.begin("epaper", false);
+  serverBaseUrl = prefs.getString("server_url", DEFAULT_FALLBACK_URL);
+  prefs.end();
+  if (serverBaseUrl.length() > 0) {
+    hasServerUrl = true;
+    Serial.printf("[CONFIG] 已从 NVS 加载服务器地址: %s\n", serverBaseUrl.c_str());
+  } else {
+    Serial.println("[CONFIG] NVS 中无已保存的服务器地址，正在等待局域网 UDP 广播...");
+  }
+}
 
+void saveServerUrl(const String& newUrl) {
+  if (newUrl == serverBaseUrl && hasServerUrl) return;
+  serverBaseUrl = newUrl;
+  hasServerUrl = true;
+  prefs.begin("epaper", false);
+  prefs.putString("server_url", serverBaseUrl);
+  prefs.end();
+  Serial.printf("[CONFIG] 服务器地址已更新并持久化至 NVS: %s\n", serverBaseUrl.c_str());
+}
+
+String getFrameUrl() {
+  if (!hasServerUrl) return "";
+  return serverBaseUrl + "/frame.bin";
+}
+
+String getConfigUrl() {
+  if (!hasServerUrl) return "";
+  return serverBaseUrl + "/api/device/config";
+}
+
+bool fetchFrame() {
+  if (WiFi.status() != WL_CONNECTED || !hasServerUrl) return false;
+
+  String url = getFrameUrl();
   HTTPClient http;
-  Serial.printf("GET %s\n", FRAME_URL);
-  if (!http.begin(FRAME_URL)) return false;
+  http.setTimeout(8000);
+  Serial.printf("GET %s\n", url.c_str());
+  if (!http.begin(url)) return false;
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     Serial.printf("frame http error: %d\n", code);
@@ -275,12 +333,29 @@ int extractInt(const String& text, const char* key, int fallback) {
   return text.substring(index, end).toInt();
 }
 
+String extractString(const String& text, const char* key) {
+  String needle = String("\"") + key + "\":";
+  int index = text.indexOf(needle);
+  if (index < 0) return "";
+  index += needle.length();
+  while (index < text.length() && (text[index] == ' ' || text[index] == '\t' || text[index] == '\r' || text[index] == '\n')) {
+    index++;
+  }
+  if (index >= text.length() || text[index] != '"') return "";
+  index++; // 跳过开头的引号
+  int end = text.indexOf("\"", index);
+  if (end < 0) return "";
+  return text.substring(index, end);
+}
+
 bool pollDeviceConfig(bool* shouldRefresh) {
   *shouldRefresh = false;
-  if (WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.status() != WL_CONNECTED || !hasServerUrl) return false;
 
+  String url = getConfigUrl();
   HTTPClient http;
-  if (!http.begin(CONFIG_URL)) return false;
+  http.setTimeout(8000);
+  if (!http.begin(url)) return false;
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
     http.end();
@@ -301,17 +376,57 @@ bool pollDeviceConfig(bool* shouldRefresh) {
   return true;
 }
 
+void startUdpBroadcastListener() {
+  if (udp.begin(UDP_BROADCAST_PORT)) {
+    udpListening = true;
+    Serial.printf("[UDP] 广播监听已就绪，端口: %d\n", UDP_BROADCAST_PORT);
+  } else {
+    Serial.printf("[UDP] 启动广播监听失败，端口: %d\n", UDP_BROADCAST_PORT);
+  }
+}
+
+bool processUdpBroadcast() {
+  if (!udpListening) return false;
+  int packetSize = udp.parsePacket();
+  if (packetSize <= 0) return false;
+
+  char packetBuffer[512];
+  int len = udp.read(packetBuffer, sizeof(packetBuffer) - 1);
+  if (len <= 0) return false;
+  packetBuffer[len] = '\0';
+
+  String payload = String(packetBuffer);
+  Serial.printf("[UDP] 收到广播包 (%d 字节) 来自 %s:%d\n", packetSize, udp.remoteIP().toString().c_str(), udp.remotePort());
+
+  if (payload.indexOf("EPAPER_SERVER") >= 0) {
+    String discoveredUrl = extractString(payload, "url");
+    if (discoveredUrl.length() > 0) {
+      Serial.printf("[UDP] 成功解析服务端 URL: %s\n", discoveredUrl.c_str());
+      bool changed = (discoveredUrl != serverBaseUrl);
+      saveServerUrl(discoveredUrl);
+      return changed;
+    }
+  }
+  return false;
+}
+
 void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.printf("connecting wifi: %s\n", WIFI_SSID);
-  while (WiFi.status() != WL_CONNECTED) {
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
     delay(500);
     Serial.print(".");
   }
   Serial.println();
-  Serial.print("wifi ip: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("wifi ip: ");
+    Serial.println(WiFi.localIP());
+    startUdpBroadcastListener();
+  } else {
+    Serial.println("wifi connect timeout, will retry in background");
+  }
 }
 
 void setupOta() {
@@ -327,7 +442,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  Serial.println("ESP32-C3 epaper frame client");
+  Serial.println("ESP32-C3 epaper frame client (UDP Broadcast Discovery)");
 
   pinMode(PIN_CS, OUTPUT);
   pinMode(PIN_DC, OUTPUT);
@@ -341,35 +456,67 @@ void setup() {
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI, PIN_CS);
 #endif
 
+  loadSavedServerUrl();
   connectWifi();
   setupOta();
 
-  bool force = false;
-  pollDeviceConfig(&force);
-  if (fetchFrame()) {
-    displayFrame();
-    lastDisplayMs = millis();
+  if (hasServerUrl) {
+    bool force = false;
+    pollDeviceConfig(&force);
+    if (fetchFrame()) {
+      displayFrame();
+      lastDisplayMs = millis();
+    }
+  } else {
+    Serial.println("等待服务端在网页端点击广播宣告...");
   }
 }
 
 void loop() {
   ArduinoOTA.handle();
 
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWifi();
-  }
-
   uint32_t now = millis();
-  bool force = false;
-  if (now - lastConfigPollMs > 10000UL) {
-    pollDeviceConfig(&force);
-    lastConfigPollMs = now;
+
+  // 非阻塞 WiFi 重连守护
+  if (WiFi.status() != WL_CONNECTED) {
+    if (now - lastWifiRetryMs > 10000UL) {
+      lastWifiRetryMs = now;
+      Serial.println("WiFi 断开，尝试重连...");
+      WiFi.reconnect();
+    }
+    delay(20);
+    return;
+  } else if (!udpListening) {
+    startUdpBroadcastListener();
   }
 
-  if (force || now - lastDisplayMs >= displayIntervalMs) {
+  // 监听并解析 UDP 广播数据包
+  bool serverChanged = processUdpBroadcast();
+
+  // 如果刚收到新的服务器广播宣告，立即触发刷新
+  if (serverChanged) {
+    Serial.println("[UDP] 服务器已更新，立即刷新屏幕数据...");
+    bool force = false;
+    pollDeviceConfig(&force);
     if (fetchFrame()) {
       displayFrame();
       lastDisplayMs = millis();
+    }
+  }
+
+  // 仅在已拥有服务器地址时进行定时拉取与配置轮询
+  if (hasServerUrl) {
+    bool force = false;
+    if (now - lastConfigPollMs > 10000UL) {
+      pollDeviceConfig(&force);
+      lastConfigPollMs = now;
+    }
+
+    if (force || now - lastDisplayMs >= displayIntervalMs) {
+      if (fetchFrame()) {
+        displayFrame();
+        lastDisplayMs = millis();
+      }
     }
   }
 

@@ -1,10 +1,11 @@
-from __future__ import annotations
-
+import json
 import os
+import socket
 import time
+from typing import Any
 
 import uvicorn
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
 
 from beszel_client import BeszelApiError, BeszelClient, BeszelConfigError, BeszelCredentials, compact_snapshot
@@ -15,15 +16,53 @@ from runtime_config import bump_force_refresh, load_runtime_config, update_runti
 
 app = FastAPI(title="EPaper NAS Display Service", version=os.getenv("APP_VERSION", "0.1.0"))
 
+_beszel_client: BeszelClient | None = None
+
 
 def get_beszel_client() -> BeszelClient:
-    return BeszelClient(
-        BeszelCredentials(
-            base_url=settings.beszel_base_url,
-            email=settings.beszel_email,
-            password=settings.beszel_password,
+    global _beszel_client
+    if _beszel_client is None:
+        _beszel_client = BeszelClient(
+            BeszelCredentials(
+                base_url=settings.beszel_base_url,
+                email=settings.beszel_email,
+                password=settings.beszel_password,
+            )
         )
-    )
+    return _beszel_client
+
+
+def send_udp_broadcast(server_url: str, broadcast_port: int | None = None, broadcast_addr: str | None = None) -> dict[str, Any]:
+    port = broadcast_port or settings.broadcast_port
+    addr = broadcast_addr or settings.broadcast_address
+    payload = {
+        "service": "epaper-nas",
+        "magic": "EPAPER_SERVER",
+        "url": server_url.rstrip("/"),
+        "timestamp": int(time.time()),
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.sendto(data, (addr, port))
+    return {"status": "broadcast_sent", "payload": payload, "target": f"{addr}:{port}"}
+
+
+def detect_server_ip(request: Request) -> str:
+    if settings.server_host_override:
+        return settings.server_host_override
+    host_header = request.headers.get("host", "")
+    if host_header:
+        host = host_header.split(":")[0].strip("[]")
+        if host and host not in {"localhost", "127.0.0.1", "0.0.0.0"}:
+            return host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        pass
+    return "127.0.0.1"
 
 
 def _beszel_error(exc: Exception) -> HTTPException:
@@ -170,6 +209,12 @@ a{{color:#24221c}}
   <datalist id="timezones"><option value="Asia/Shanghai"><option value="UTC"><option value="Asia/Tokyo"><option value="America/Los_Angeles"><option value="America/New_York"></datalist>
   <button id="save">save</button><button id="force">force</button>
 </div>
+<div class="broadcast-bar" style="width:{EPD_WIDTH}px;display:flex;gap:6px;align-items:center;margin-bottom:10px;font-size:12px">
+  <label style="white-space:nowrap">📢 服务器广播:</label>
+  <input id="broadcastHost" placeholder="NAS IP/域名" style="flex:1" title="ESP32 访问的主机 IP 或域名">
+  <input id="broadcastPort" type="number" value="15002" style="width:58px" title="ESP32 访问端口">
+  <button id="broadcastBtn" style="background:#eedfbe;font-weight:bold;cursor:pointer">发送广播宣告</button>
+</div>
 <div class="systems" id="systems"></div>
 <div class="bar"><span>EPD preview: {EPD_WIDTH}x{EPD_HEIGHT}, decoded from frame.bin</span><button id="refresh">refresh</button></div>
 <div class="shell"><canvas id="screen" width="{EPD_WIDTH}" height="{EPD_HEIGHT}"></canvas></div>
@@ -179,6 +224,10 @@ a{{color:#24221c}}
 const W={EPD_WIDTH}, H={EPD_HEIGHT}, HEADER=15;
 const canvas=document.getElementById('screen'), ctx=canvas.getContext('2d'), statusEl=document.getElementById('status');
 const intervalInput=document.getElementById('interval'), chartInput=document.getElementById('chart'), fontInput=document.getElementById('font'), fontSizeInput=document.getElementById('fontSize'), timezoneInput=document.getElementById('timezone'), systemsEl=document.getElementById('systems');
+const broadcastHostInput=document.getElementById('broadcastHost'), broadcastPortInput=document.getElementById('broadcastPort'), broadcastBtn=document.getElementById('broadcastBtn');
+if (!broadcastHostInput.value && window.location.hostname && window.location.hostname !== '127.0.0.1' && window.location.hostname !== 'localhost') {{
+  broadcastHostInput.value = window.location.hostname;
+}}
 const paper=[246,242,222,255], ink=[36,34,28,255], red=[176,28,22,255];
 let settings={{display_interval_seconds:60,chart_minutes:1440,system_modes:{{}},font_name:'pixel',font_size:0,timezone:'Asia/Shanghai',force_refresh_seq:0}}, timer=null;
 function bit(bytes,index){{return (bytes[index>>3]&(0x80>>(index&7)))!==0}}
@@ -227,10 +276,31 @@ async function saveSettings(){{
   settings=await res.json(); intervalInput.value=settings.display_interval_seconds; chartInput.value=settings.chart_minutes; fontInput.value=settings.font_name||'pixel'; fontSizeInput.value=settings.font_size||0; timezoneInput.value=settings.timezone||'Asia/Shanghai'; await loadSystems(); resetTimer(); await drawFrame();
 }}
 async function forceRefresh(){{const res=await fetch('/api/admin/force-refresh',{{method:'POST'}}); settings=await res.json(); await drawFrame()}}
+async function announceServer(){{
+  statusEl.textContent='正在发送局域网 UDP 广播...';
+  try{{
+    const ip=broadcastHostInput.value.trim();
+    const port=Number(broadcastPortInput.value.trim())||15002;
+    const res=await fetch('/api/admin/broadcast',{{
+      method:'POST',
+      headers:{{'content-type':'application/json'}},
+      body:JSON.stringify({{ip,port}})
+    }});
+    const data=await res.json();
+    if(res.ok){{
+      statusEl.textContent=`广播成功: ${{data.url}} 已向局域网宣告`;
+    }}else{{
+      statusEl.textContent=`广播失败: ${{data.detail||res.statusText}}`;
+    }}
+  }}catch(err){{
+    statusEl.textContent=`广播出错: ${{err.message}}`;
+  }}
+}}
 function resetTimer(){{if(timer)clearInterval(timer); timer=setInterval(()=>drawFrame().catch(e=>statusEl.textContent=e.message),settings.display_interval_seconds*1000)}}
 document.getElementById('refresh').onclick=()=>drawFrame().catch(e=>statusEl.textContent=e.message);
 document.getElementById('save').onclick=()=>saveSettings().catch(e=>statusEl.textContent=e.message);
 document.getElementById('force').onclick=()=>forceRefresh().catch(e=>statusEl.textContent=e.message);
+broadcastBtn.onclick=()=>announceServer().catch(e=>statusEl.textContent=e.message);
 loadSettings().then(drawFrame).catch(e=>statusEl.textContent=e.message);
 </script></html>
 """
@@ -249,6 +319,33 @@ def admin_update_settings(payload: dict[str, object] = Body(...)) -> dict[str, o
 @app.post("/api/admin/force-refresh")
 def admin_force_refresh() -> dict[str, object]:
     return bump_force_refresh().__dict__
+
+
+@app.post("/api/admin/broadcast")
+def admin_broadcast(request: Request, payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    server_ip = str(payload.get("ip") or "").strip()
+    port = int(payload.get("port") or settings.device_port)
+    broadcast_port = int(payload.get("broadcast_port") or settings.broadcast_port)
+    broadcast_addr = str(payload.get("broadcast_address") or settings.broadcast_address).strip()
+
+    if not server_ip:
+        server_ip = detect_server_ip(request)
+
+    url = str(payload.get("url") or "").strip()
+    if not url:
+        url = f"http://{server_ip}:{port}"
+
+    try:
+        detail = send_udp_broadcast(url, broadcast_port=broadcast_port, broadcast_addr=broadcast_addr)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"发送广播失败: {exc}") from exc
+
+    return {
+        "ok": True,
+        "message": f"广播已成功发送至 {broadcast_addr}:{broadcast_port}",
+        "url": url,
+        "detail": detail,
+    }
 
 
 @app.get("/api/device/config")

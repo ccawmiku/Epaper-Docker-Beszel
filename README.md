@@ -1,6 +1,6 @@
 # ESP32-C3 墨水屏 NAS 状态屏
 
-版本：`0.1.4`
+版本：`0.1.5`
 
 这个项目把 ESP32-C3 作为轻量显示端：NAS 上的 Docker 服务连接 Beszel、渲染 400×300 墨水屏画面并输出统一的 `frame.bin`。浏览器预览页和真实设备读取同一帧数据，方便在烧录前核对布局，也减少固件侧的数据处理。
 
@@ -80,7 +80,7 @@ docker compose up -d
 推送到 GitHub 后，Actions 会发布：
 
 ```text
-ghcr.io/ccawmiku/epaper-nas-display:0.1.4
+ghcr.io/ccawmiku/epaper-nas-display:0.1.5
 ghcr.io/ccawmiku/epaper-nas-display:latest
 ```
 
@@ -89,11 +89,11 @@ NAS 上运行：
 ```bash
 cd server
 cp .env.example .env
-export EPAPER_IMAGE=ghcr.io/ccawmiku/epaper-nas-display:0.1.4
+export EPAPER_IMAGE=ghcr.io/ccawmiku/epaper-nas-display:0.1.5
 docker compose -f docker-compose.image.yml up -d
 ```
 
-## ESP32-C3 固件
+## ESP32-C3 固件与局域网自动配对
 
 打开：
 
@@ -101,23 +101,20 @@ docker compose -f docker-compose.image.yml up -d
 esp32c3_epaper_frame/esp32c3_epaper_frame.ino
 ```
 
-默认读取：
-
-```cpp
-static const char* WIFI_SSID = "YOUR_WIFI_SSID";
-static const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-static const char* FRAME_URL = "http://YOUR_NAS_IP:15002/frame.bin";
-static const char* CONFIG_URL = "http://YOUR_NAS_IP:15002/api/device/config";
-```
-
-本地烧录前，把占位符改成你的 WiFi 和 NAS 地址。例如：
+只需配置你的 WiFi 名称与密码，**无需硬编码服务器 IP**：
 
 ```cpp
 static const char* WIFI_SSID = "你的WiFi";
 static const char* WIFI_PASSWORD = "你的WiFi密码";
-static const char* FRAME_URL = "http://YOUR_NAS_IP:15002/frame.bin";
-static const char* CONFIG_URL = "http://YOUR_NAS_IP:15002/api/device/config";
 ```
+
+### 自动配对流程：
+1. ESP32 开机联网后，会自动在后台监听 UDP 广播（默认端口 `15002`）。
+2. 在浏览器打开服务管理页：`http://YOUR_NAS_IP:15001/preview`。
+3. 点击 **“📢 广播服务器”**（可确认或自定义填入宿主机 IP，页面已自动填入当前访问地址）。
+4. ESP32 监听到广播后，自动绑定服务器并把地址持久化存储到 NVS 中，随后立即拉取最新画面并刷新墨水屏！
+5. 下次重启断电时，ESP32 会自动读取已保存的服务器地址继续工作，无需重复广播。如需更换服务器，在新的管理页面再次点击广播宣告即可无缝切换。
+
 
 ## frame.bin 格式
 

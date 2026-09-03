@@ -36,6 +36,10 @@ class Settings:
     display_chart_minutes: int = _env_int("DISPLAY_CHART_MINUTES", 1440)
     app_host: str = _env("APP_HOST", "0.0.0.0")
     app_port: int = _env_int("APP_PORT", 15001)
+    device_port: int = _env_int("DEVICE_PORT", 15002)
+    broadcast_port: int = _env_int("BROADCAST_PORT", 15002)
+    broadcast_address: str = _env("BROADCAST_ADDRESS", "255.255.255.255")
+    server_host_override: str = _env("SERVER_HOST_OVERRIDE", "")
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "beszel_base_url", self.beszel_base_url.rstrip("/"))
