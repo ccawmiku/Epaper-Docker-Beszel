@@ -430,7 +430,7 @@ canvas {{
       </div>
       <div class="grid-fields">
         <div class="field"><label>刷新间隔(秒)</label><input id="interval" type="number" min="30" max="3600" step="30"></div>
-        <div class="field"><label>折线时间(分)</label><input id="chart" type="number" min="60" max="1440" step="60"></div>
+        <div class="field"><label>折线时间 (Range)</label><select id="chart"><option value="720">12小时 (12h)</option><option value="1440">24小时 (24h)</option></select></div>
         <div class="field"><label>字体类型</label><select id="font"><option value="pixel">pixel (默认点阵)</option><option value="narrow">narrow</option><option value="wide">wide</option><option value="bold">bold</option></select></div>
         <div class="field"><label>时区</label><input id="timezone" list="timezones"><datalist id="timezones"><option value="Asia/Shanghai"><option value="UTC"><option value="Asia/Tokyo"><option value="America/Los_Angeles"><option value="America/New_York"></datalist></div>
       </div>
@@ -541,7 +541,7 @@ async function loadSettings() {{
   const res = await fetch('/api/admin/settings', {{ cache: 'no-store' }});
   settings = await res.json();
   intervalInput.value = settings.display_interval_seconds;
-  chartInput.value = settings.chart_minutes;
+  chartInput.value = String(Number(settings.chart_minutes) <= 720 ? 720 : 1440);
   fontInput.value = settings.font_name || 'pixel';
   timezoneInput.value = settings.timezone || 'Asia/Shanghai';
   await loadSystems();
@@ -769,6 +769,7 @@ def _display_snapshot(minutes: int) -> dict[str, object]:
         container_minutes=1,
         record_type=record_type,
     )
+    snapshot["chart_minutes"] = minutes
     _apply_display_rotation(snapshot, runtime)
     return snapshot
 
@@ -807,7 +808,14 @@ def _apply_display_rotation(snapshot: dict[str, object], runtime) -> None:
     active = active_pool[index] if isinstance(active_pool[index], dict) else {}
     active_id = str((active.get("system") or {}).get("id") or "")
     mode = modes.get(active_id, "normal")
-    snapshot["display"] = {"active_system_id": active_id, "invert": mode == "invert", "mode": mode, "font_name": runtime.font_name, "timezone": runtime.timezone}
+    snapshot["display"] = {
+        "active_system_id": active_id,
+        "invert": mode == "invert",
+        "mode": mode,
+        "font_name": runtime.font_name,
+        "timezone": runtime.timezone,
+        "chart_minutes": runtime.chart_minutes,
+    }
 
 
 def _beszel_chart_window(minutes: int) -> tuple[str, int]:

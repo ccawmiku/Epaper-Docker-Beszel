@@ -210,7 +210,12 @@ def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
 
     draw.line((254, 33, 254, 59), fill=INK)
     FONT_TINY.draw(draw, (259, 37), "RANGE", SOFT_INK)
-    FONT_TINY.draw(draw, (262, 47), "24H", INK)
+    chart_minutes = int(snapshot.get("chart_minutes") or (snapshot.get("display") or {}).get("chart_minutes") or 1440)
+    hours = max(1, round(chart_minutes / 60))
+    range_str = f"{hours}H"
+    rw = FONT_TINY.measure(range_str)[0]
+    rx = 254 + max(0, (42 - rw) // 2)
+    FONT_TINY.draw(draw, (rx, 47), range_str, INK)
 
     # =========================================================================
     # 2. 中间 3 监控波形卡片 (y: 63 ~ 125, 高 62)
