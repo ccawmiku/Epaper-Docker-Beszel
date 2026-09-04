@@ -9,5 +9,7 @@ services:
       - "15001:15001"
       - "15002:15001"
       - "15002:15002/udp"
+    volumes:
+      - ./runtime_config.json:/app/runtime_config.json
     # 若在 NAS 环境中 Docker 无法直接穿透 UDP 广播至局域网，建议启用 host 网络模式：
     # network_mode: host

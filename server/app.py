@@ -777,8 +777,14 @@ def _display_modes_for(systems: list[dict[str, object]], runtime) -> dict[str, s
     modes = dict(runtime.system_modes or {})
     for index, item in enumerate(systems):
         system_id = str(item.get("id") or "")
+        name = str(item.get("name") or item.get("host") or "").lower()
         if system_id and system_id not in modes:
-            modes[system_id] = "invert" if index == 1 else "normal"
+            if "istore" in name or "openwrt" in name or "router" in name:
+                modes[system_id] = "invert"
+            elif "nas" in name or "synology" in name:
+                modes[system_id] = "normal"
+            else:
+                modes[system_id] = "disabled"
     return modes
 
 

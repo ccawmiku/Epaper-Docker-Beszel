@@ -15,7 +15,7 @@ _lock = Lock()
 
 @dataclass
 class RuntimeConfig:
-    display_interval_seconds: int = 60
+    display_interval_seconds: int = 1200
     chart_minutes: int = 1440
     system_modes: dict[str, str] | None = None
     font_name: str = "pixel"
@@ -70,7 +70,7 @@ def _load_unlocked() -> RuntimeConfig:
     raw_font_size = data.get("font_size")
     font_size_val = 0 if (raw_font_size is None or raw_font_size == -1) else _bounded_int(raw_font_size, 0, 2, 0)
     return RuntimeConfig(
-        display_interval_seconds=_bounded_int(data.get("display_interval_seconds"), 30, 3600, 60),
+        display_interval_seconds=_bounded_int(data.get("display_interval_seconds"), 30, 86400, 1200),
         chart_minutes=_bounded_int(data.get("chart_minutes"), 60, 1440, 1440),
         system_modes=_clean_modes(data.get("system_modes")),
         font_name=_clean_font_name(data.get("font_name")),
