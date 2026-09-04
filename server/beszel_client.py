@@ -113,6 +113,7 @@ class BeszelClient:
                     "latest": self._latest_summary(stats, container_stats),
                     "container_latest": self._latest_containers(container_stats, containers),
                     "cpu_history": _history(stats, "cpu"),
+                    "iowait_history": _iowait_history(stats),
                     "memory_history": _history(stats, "mp"),
                     "disk_history": _history(stats, "dp"),
                 }
@@ -182,9 +183,12 @@ class BeszelClient:
         stats = latest.get("stats") if isinstance(latest.get("stats"), dict) else {}
         container_record = container_stats[0] if container_stats else {}
         containers = container_record.get("stats") if isinstance(container_record.get("stats"), list) else []
+        cpub = stats.get("cpub") if isinstance(stats.get("cpub"), list) else []
+        iowait = cpub[2] if len(cpub) > 2 and isinstance(cpub[2], (int, float)) else 0.0
         return {
             "created": latest.get("created"),
             "cpu_percent": _pick(stats, "cpu"),
+            "iowait_percent": iowait,
             "memory_gb": _pick(stats, "m"),
             "memory_used_gb": _pick(stats, "mu"),
             "memory_percent": _pick(stats, "mp"),
@@ -233,6 +237,18 @@ def _history(records: list[dict[str, Any]], key: str) -> list[Any]:
     for record in reversed(records):
         stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
         out.append(stats.get(key))
+    return out
+
+
+def _iowait_history(records: list[dict[str, Any]]) -> list[Any]:
+    out: list[Any] = []
+    for record in reversed(records):
+        stats = record.get("stats") if isinstance(record.get("stats"), dict) else {}
+        cpub = stats.get("cpub")
+        if isinstance(cpub, list) and len(cpub) > 2 and isinstance(cpub[2], (int, float)):
+            out.append(float(cpub[2]))
+        else:
+            out.append(0.0)
     return out
 
 

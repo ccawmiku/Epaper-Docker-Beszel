@@ -222,11 +222,11 @@ def render_snapshot(snapshot: dict[str, Any]) -> RenderedFrame:
     # =========================================================================
     cw = 128
     gap = 6
-    r_name = _clip(str((router.get("system") or {}).get("name") or "SYS2").upper(), 8)
+    io_title = f"{sys_name} IOWAIT" if FONT_TINY.measure(f"{sys_name} IOWAIT")[0] <= 70 else f"{sys_name} IO"
     panels = [
         (3, 63, cw, 62, f"{sys_name} CPU", nas.get("cpu_history", []), _fmt_pct((nas.get("latest") or {}).get("cpu_percent"))),
         (3 + cw + gap, 63, cw, 62, f"{sys_name} MEM", nas.get("memory_history", []), _fmt_pct((nas.get("latest") or {}).get("memory_percent"))),
-        (3 + (cw + gap) * 2, 63, 396 - (3 + (cw + gap) * 2), 62, f"{r_name} CPU", router.get("cpu_history", []), _fmt_pct((router.get("latest") or {}).get("cpu_percent"))),
+        (3 + (cw + gap) * 2, 63, 396 - (3 + (cw + gap) * 2), 62, io_title, nas.get("iowait_history", []), _fmt_pct((nas.get("latest") or {}).get("iowait_percent"))),
     ]
 
     for px, py, pw, ph, ptitle, pvals, pval in panels:
